@@ -1,6 +1,11 @@
 # simenv
 
-独立仿真环境：一份 Gazebo 世界，N 套现有 `runtime-sim` 车端。设计见 [`docs/superpowers/specs/2026-09-21-simenv-design.md`](docs/superpowers/specs/2026-09-21-simenv-design.md)。
+独立仿真环境：一份 Gazebo 世界，N 套现有 `runtime-sim` 车端。
+
+| 文档 | 用途 |
+| --- | --- |
+| [`AGENTS.md`](AGENTS.md) | 仓库规则 |
+| [`docs/superpowers/specs/2026-09-21-simenv-design.md`](docs/superpowers/specs/2026-09-21-simenv-design.md) | 世界 / 程序边界与契约 |
 
 ```text
 go test ./...

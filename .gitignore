@@ -1,3 +1,10 @@
 /simenv
 /simenv-world
 /tmp/
+.codegraph/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+!.cursor/mcp.json
+.superpowers/
+docs/superpowers/plans/
