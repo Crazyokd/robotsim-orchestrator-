@@ -7,7 +7,7 @@ default:
 
 go:
   stage: check
-  image: golang:1.24-bookworm
+  image: nexus3.sr/go:latest-bookworm-dev-env-linux-amd64
   tags:
     - docker-cicd
   variables:
@@ -26,16 +26,10 @@ go:
 
 world-image:
   stage: image
-  image: docker:27-cli
+  image: nexus3.sr/docker:25-git
   tags:
     - docker-cicd
     - docker-builder
-  services:
-    - name: docker:27-dind
-      command: ["--tls=false"]
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
   needs:
     - go
   rules:
