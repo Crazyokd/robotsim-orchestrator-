@@ -8,6 +8,8 @@ default:
 go:
   stage: check
   image: golang:1.24-bookworm
+  tags:
+    - docker-cicd
   variables:
     GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
     GOMODCACHE: "$CI_PROJECT_DIR/.cache/go-mod"
@@ -25,6 +27,9 @@ go:
 world-image:
   stage: image
   image: docker:27-cli
+  tags:
+    - docker-cicd
+    - docker-builder
   services:
     - name: docker:27-dind
       command: ["--tls=false"]
