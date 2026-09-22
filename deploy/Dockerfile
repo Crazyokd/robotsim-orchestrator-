@@ -1,11 +1,11 @@
-FROM golang:1.24-bookworm AS build
+FROM nexus3.sr/go:latest-bookworm-dev-env-linux-amd64 AS build
 WORKDIR /src
 COPY go.mod ./
 COPY cmd cmd
 COPY internal internal
 RUN go build -o /simenv-world ./cmd/simenv-world
 
-FROM ubuntu:24.04
+FROM nexus3.sr:8060/ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release \
