@@ -201,7 +201,7 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session) error 
 	if err != nil {
 		return err
 	}
-	worldCmd := []string{"/usr/local/bin/simenv-world", "--session", string(rawSession)}
+	worldCmd := []string{"--session", string(rawSession)}
 	return w.Engine.Start(ctx, ContainerSpec{
 		Name:    contract.WorldContainer,
 		Image:   cfg.EnvImage,
