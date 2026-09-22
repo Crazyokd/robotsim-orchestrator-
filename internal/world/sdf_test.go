@@ -27,7 +27,7 @@ const sourceSDF = `<?xml version="1.0"?>
 `
 
 func TestRewriteNamespacesTopicsKeepsFrames(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", 0.5)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0.5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestRewriteNamespacesTopicsKeepsFrames(t *testing.T) {
 }
 
 func TestRewriteTruthOdomRenamesWheelTopics(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", 0)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,5 +67,18 @@ func TestRewriteTruthOdomRenamesWheelTopics(t *testing.T) {
 	}
 	if !strings.Contains(out, "<odom_topic>/robot1/odom</odom_topic>") {
 		t.Fatal("truth odom topic missing")
+	}
+}
+
+func TestRewriteUsesTopicPrefixSeparatelyFromModelName(t *testing.T) {
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "fleet/robot1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `name="robot1"`) {
+		t.Fatalf("model name not rewritten: %s", out)
+	}
+	if !strings.Contains(out, "<topic>/fleet/robot1/cmd_vel</topic>") {
+		t.Fatalf("topic prefix not used: %s", out)
 	}
 }

@@ -78,11 +78,11 @@ v1 注册的是 `Mobility`：
 | 身体形态、传感套件 | Profile + 实现 |
 | Docker 还是本机进程 | 对应端口实现 |
 
-v1 三元组：`GazeboWorld`、`EasyGoVehicle`、`GzBridge`，共用 `Mobility`。`GZ_PARTITION`、`/robotN/odom`、`:18189` 只出现在这三个包里。
+v1 三元组：`GazeboWorld`、`EasyGoVehicle`、`GzBridge`，共用 `Mobility`。`GZ_PARTITION` 与 `/robotN/odom` 来自中立 Session；`:18189`、`ROS_DOMAIN_ID=11`、`/sros` 只出现在 EasyGoVehicle 实现里。
 
 ## 4. 现码越界
 
-`Process.Run` 读 SDF，`appEnv` 下发 `GZ_*`，契约里的 `Robot` 带 HTTP / `ROS_DOMAIN_ID` / 位姿算术，编排核直接握 Docker。运动学和现网编码都漏进了核。以本文件为准。
+已下沉：契约里的 `Robot` 不再带 HTTP / `ROS_DOMAIN_ID` / runtime root；EasyGo launch/env/端口算术只在 EasyGoVehicle 实现里。仍需后续收敛：`Process.Run` 读 SDF，编排核直接握 Docker，出生点还在会话构建里。以本文件为准。
 
 ## 5. 不做
 

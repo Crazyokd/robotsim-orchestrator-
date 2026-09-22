@@ -23,15 +23,16 @@ EasyGo 现有仿真已经具备正确拓扑的多车路径（`sim_multi_gazebo` 
 
 环境镜像**不以** `runtime-sim` 为 `FROM`。底包只装 Gazebo Harmonic 以及 spawn 所需的最小依赖。
 
-## 3. 车端契约
+## 3. 会话契约与 EasyGo 实现约定
 
 与现有 `start_gazebo:=false` 对齐，不另发明一套 topic。数值来自 EasyGo `multi_robot_instance.py` / `multi_robot_model.py`（`port_offset=0`、`ros_domain_offset=0`）。
 
-- 实体名、GZ topic 前缀：`robotN`（N 从 1）。GZ topic 形如 `/robotN/odom`。
+- `Session` 只下发 World、Partition 与 Robot 清单；Robot 只含 `Index`、`Name`、`TopicPrefix`、`Pose`。
+- 实体名、GZ topic 前缀默认：`robotN`（N 从 1）。GZ topic 形如 `/robotN/odom`。
 - `GZ_IP=127.0.0.1`，`GZ_PARTITION=easygo_sim`（可用配置覆盖，默认必须与现网多车一致）。
 - Gazebo 发 GZ `clock`。程序容器在自己的 ROS domain 上把 GZ `clock` 桥成 `/clock`（现有 launch 已做）。环境容器不给车端喂 ROS `/clock`。
-- 程序 `ROS_DOMAIN_ID = 11 + (N-1)`。环境若需要 ROS，固定 `ROS_DOMAIN_ID=1`，不进车端域。
-- 程序 HTTP：`frontend=18088+100N`，`api=18089+100N`。因此 N=1 的 API 是 `127.0.0.1:18189`，不是旧单车的 `:18089`。
+- EasyGoVehicle 实现内计算程序 `ROS_DOMAIN_ID = 11 + (N-1)`。环境若需要 ROS，固定 `ROS_DOMAIN_ID=1`，不进车端域。
+- EasyGoVehicle 实现内计算程序 HTTP：`frontend=18088+100N`，`api=18089+100N`。因此 N=1 的 API 是 `127.0.0.1:18189`，不是旧单车的 `:18089`。
 - 每车 `/sros` 挂到宿主独立目录，互不复用。
 - 出生点默认：`(3×(N-1), 0, yaw=0)`，与现网 `DEFAULT_SPAWN_X_STRIDE` 一致。`--poses` 可覆盖。
 
@@ -65,7 +66,7 @@ ros2 launch easygo_sim_bringup sim_easygo.launch.py
   robot_name:=robotN
 ```
 
-以及契约要求的端口、domain、`GZ_*`、`/sros` 挂载。host network，与现网车端一致，GZ localhost 才能通。
+以及 EasyGoVehicle 实现要求的端口、domain、`GZ_*`、`/sros` 挂载。host network，与现网车端一致，GZ localhost 才能通。
 
 默认 headless。v1 不起驾驶台、观察台、RViz。
 
@@ -77,7 +78,7 @@ ros2 launch easygo_sim_bringup sim_easygo.launch.py
 cmd/simenv/                 入口
 internal/orchestrator/      Docker API：起停环境/程序容器
 internal/world/             gz server、spawn、等待 clock/实体
-internal/contract/          robotN、分区、端口、domain，带 Go 测试
+internal/contract/          session、robotN、topic 前缀、分区、出生点，带 Go 测试
 deploy/                     环境镜像 Dockerfile
 docs/superpowers/specs/     本文件
 ```

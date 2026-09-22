@@ -11,9 +11,12 @@ var topicTags = map[string]bool{
 	"topic": true, "odom_topic": true, "tf_topic": true,
 }
 
-func RewriteRobotSDF(source string, robotName string, yaw float64) (string, error) {
+func RewriteRobotSDF(source string, robotName, topicPrefix string, yaw float64) (string, error) {
 	if robotName == "" {
 		return "", fmt.Errorf("robot name must not be empty")
+	}
+	if topicPrefix == "" {
+		return "", fmt.Errorf("topic prefix must not be empty")
 	}
 	dec := xml.NewDecoder(strings.NewReader(source))
 	var out strings.Builder
@@ -64,7 +67,7 @@ func RewriteRobotSDF(source string, robotName string, yaw float64) (string, erro
 				continue
 			}
 			if capture != nil && t.Name.Local == captureTag {
-				text := rewriteTopic(capture.String(), robotName, captureTag, diffDrive)
+				text := rewriteTopic(capture.String(), topicPrefix, captureTag, diffDrive)
 				out.WriteString(xmlEscape(text))
 				capture = nil
 				captureTag = ""
@@ -73,7 +76,7 @@ func RewriteRobotSDF(source string, robotName string, yaw float64) (string, erro
 				diffDrive = false
 			}
 			if t.Name.Local == "model" {
-				out.WriteString(truthOdomPlugin(robotName))
+				out.WriteString(truthOdomPlugin(topicPrefix))
 			}
 			fmt.Fprintf(&out, "</%s>", t.Name.Local)
 		case xml.CharData:

@@ -16,6 +16,21 @@ import (
 
 var ErrNotFound = errors.New("container not found")
 
+const (
+	easyGoHTTPBaseFrontend = 18088
+	easyGoHTTPBaseAPI      = 18089
+	easyGoHTTPBaseVoice    = 18091
+	easyGoHTTPStride       = 100
+	easyGoMQTTBase         = 1883
+	easyGoObserveBase      = 8090
+	easyGoWebGZWebBase     = 6080
+	easyGoWebGZRFBBase     = 5901
+	easyGoRVizWebBase      = 6081
+	easyGoRVizRFBBase      = 5902
+	easyGoROSDomainBase    = 11
+	easyGoRuntimeRoot      = "/sros"
+)
+
 type ContainerSpec struct {
 	Name    string
 	Image   string
@@ -57,6 +72,20 @@ type Status struct {
 	EnvImage  string
 	AppImage  string
 	Connected bool
+}
+
+type easyGoRuntime struct {
+	frontendPort int
+	apiPort      int
+	voicePort    int
+	mqttPort     int
+	observePort  int
+	webGZWebPort int
+	webGZRFBPort int
+	rvizWebPort  int
+	rvizRFBPort  int
+	rosDomainID  int
+	runtimeRoot  string
 }
 
 type WorldPort interface {
@@ -227,12 +256,13 @@ func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session, robo
 	if err := os.MkdirAll(hostSros, 0o755); err != nil {
 		return err
 	}
-	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, robot.LaunchArgs()...)
+	runtime := easyGoRuntimeFor(robot.Index)
+	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(robot, runtime)...)
 	if err := v.Engine.Start(ctx, ContainerSpec{
 		Name:    contract.AppContainer(robot.Name),
 		Image:   cfg.AppImage,
 		Command: cmd,
-		Env:     appEnv(robot, session),
+		Env:     appEnv(robot, session, runtime),
 		Binds:   []string{hostSros + ":/sros"},
 		Network: "host",
 		Ipc:     "host",
@@ -257,9 +287,7 @@ func (v EasyGoVehicle) Status(ctx context.Context) ([]AppStatus, error) {
 		fmt.Sscanf(info.Name, "simenv-robot%d", &index)
 		api := 0
 		if index > 0 {
-			if robot, err := contract.NewRobot(index, contract.Pose{X: 1}); err == nil {
-				api = robot.APIPort
-			}
+			api = easyGoRuntimeFor(index).apiPort
 		}
 		apps = append(apps, AppStatus{Name: info.Name, Running: info.Running, APIPort: api, Image: info.Image})
 	}
@@ -342,21 +370,78 @@ func readReady(ctx context.Context, engine Engine) (world.ReadyReport, error) {
 	return report, nil
 }
 
-func appEnv(robot contract.Robot, session contract.Session) map[string]string {
+func easyGoRuntimeFor(index int) easyGoRuntime {
+	return easyGoRuntime{
+		frontendPort: easyGoHTTPBaseFrontend + index*easyGoHTTPStride,
+		apiPort:      easyGoHTTPBaseAPI + index*easyGoHTTPStride,
+		voicePort:    easyGoHTTPBaseVoice + index*easyGoHTTPStride,
+		mqttPort:     easyGoMQTTBase + index,
+		observePort:  easyGoObserveBase + index*easyGoHTTPStride,
+		webGZWebPort: easyGoWebGZWebBase + index*easyGoHTTPStride,
+		webGZRFBPort: easyGoWebGZRFBBase + index*easyGoHTTPStride,
+		rvizWebPort:  easyGoRVizWebBase + index*easyGoHTTPStride,
+		rvizRFBPort:  easyGoRVizRFBBase + index*easyGoHTTPStride,
+		rosDomainID:  easyGoROSDomainBase + (index - 1),
+		runtimeRoot:  easyGoRuntimeRoot,
+	}
+}
+
+func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime) []string {
+	return []string{
+		"start_gazebo:=false",
+		"use_gz_gui:=false",
+		"use_rviz:=false",
+		"enable_person_follow:=false",
+		"enable_multi_robot_wifi:=true",
+		"robot_name:=" + robot.TopicPrefix,
+		"runtime_root:=" + runtime.runtimeRoot,
+		"map_path:=" + runtime.runtimeRoot + "/map/",
+		fmt.Sprintf("frontend_port:=%d", runtime.frontendPort),
+		fmt.Sprintf("api_port:=%d", runtime.apiPort),
+		fmt.Sprintf("voice_port:=%d", runtime.voicePort),
+		fmt.Sprintf("mqtt_port:=%d", runtime.mqttPort),
+		fmt.Sprintf("slam_web_port:=%d", easyGoSlamWebPort(robot.Index)),
+		fmt.Sprintf("observe_port:=%d", runtime.observePort),
+		fmt.Sprintf("webgz_web_port:=%d", runtime.webGZWebPort),
+		fmt.Sprintf("webgz_rfb_port:=%d", runtime.webGZRFBPort),
+		fmt.Sprintf("webgz_display:=:%d", 10+robot.Index*10),
+		"webgz_log_dir:=/tmp/webgz-" + robot.Name,
+		fmt.Sprintf("rviz_web_port:=%d", runtime.rvizWebPort),
+		fmt.Sprintf("rviz_rfb_port:=%d", runtime.rvizRFBPort),
+		fmt.Sprintf("rviz_display:=:%d", 11+robot.Index*10),
+		"rviz_log_dir:=/tmp/rviz-" + robot.Name,
+		"serial_number:=" + robot.Name,
+		"easygo_app_param_db_path:=" + runtime.runtimeRoot + "/db/cfg.db3",
+		"database_url:=sqlite://" + runtime.runtimeRoot + "/db/easygo.db?mode=rwc",
+	}
+}
+
+func easyGoSlamWebPort(index int) int {
+	if index == 1 {
+		return 8088
+	}
+	return 8018 + (index-2)*10
+}
+
+func appEnv(robot contract.Robot, session contract.Session, runtime easyGoRuntime) map[string]string {
 	return map[string]string{
-		"ROS_DOMAIN_ID":                 strconv.Itoa(robot.ROSDomainID),
+		"ROS_DOMAIN_ID":                 strconv.Itoa(runtime.rosDomainID),
 		"ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
 		"RMW_IMPLEMENTATION":            "rmw_cyclonedds_cpp",
-		"CYCLONEDDS_URI":                contract.CycloneDDSURI(),
+		"CYCLONEDDS_URI":                cycloneDDSURI(),
 		"GZ_IP":                         contract.GZIP,
 		"GZ_PARTITION":                  session.Partition,
 		"SERIAL_NUMBER":                 robot.Name,
-		"MQTT_BROKER_PORT":              strconv.Itoa(robot.MQTTPort),
-		"BACKEND_PORT":                  strconv.Itoa(robot.VoicePort),
-		"PARAM_DB_PATH":                 robot.RuntimeRoot + "/db/cfg.db3",
-		"DATABASE_URL":                  "sqlite://" + robot.RuntimeRoot + "/db/easygo.db?mode=rwc",
+		"MQTT_BROKER_PORT":              strconv.Itoa(runtime.mqttPort),
+		"BACKEND_PORT":                  strconv.Itoa(runtime.voicePort),
+		"PARAM_DB_PATH":                 runtime.runtimeRoot + "/db/cfg.db3",
+		"DATABASE_URL":                  "sqlite://" + runtime.runtimeRoot + "/db/easygo.db?mode=rwc",
 		"EASYGO_SIM_WORLD":              session.World,
-		"EASYGO_SIM_APP_ROOT":           robot.RuntimeRoot + "/easygo-app",
-		"EASYGO_WEBAPP_DIR":             robot.RuntimeRoot + "/webapp",
+		"EASYGO_SIM_APP_ROOT":           runtime.runtimeRoot + "/easygo-app",
+		"EASYGO_WEBAPP_DIR":             runtime.runtimeRoot + "/webapp",
 	}
+}
+
+func cycloneDDSURI() string {
+	return `<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="false" /></Interfaces><AllowMulticast>false</AllowMulticast><DontRoute>true</DontRoute></General><Discovery><Peers><Peer Address="127.0.0.1" /></Peers><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>255</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>`
 }

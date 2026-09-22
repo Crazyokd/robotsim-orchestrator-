@@ -176,10 +176,15 @@ func TestStartWorldThenApp(t *testing.T) {
 		t.Fatalf("app name=%s", appSpec.Name)
 	}
 	joined := strings.Join(appSpec.Command, " ")
-	if !strings.Contains(joined, "start_gazebo:=false") || !strings.Contains(joined, "use_gz_gui:=false") {
+	for _, arg := range []string{"start_gazebo:=false", "use_gz_gui:=false", "robot_name:=robot1", "api_port:=18189", "runtime_root:=/sros"} {
+		if !strings.Contains(joined, arg) {
+			t.Fatalf("app command missing %s: %v", arg, appSpec.Command)
+		}
+	}
+	if containsAny(appSpec.Command, "start_gazebo:=true") {
 		t.Fatalf("app command=%v", appSpec.Command)
 	}
-	if appSpec.Env["GZ_PARTITION"] != "easygo_sim" || appSpec.Env["ROS_DOMAIN_ID"] != "11" {
+	if appSpec.Env["GZ_PARTITION"] != "easygo_sim" || appSpec.Env["ROS_DOMAIN_ID"] != "11" || appSpec.Env["BACKEND_PORT"] != "18191" {
 		t.Fatalf("app env=%v", appSpec.Env)
 	}
 }
@@ -189,6 +194,16 @@ func TestStartRejectsEmptyAppImage(t *testing.T) {
 	_, err := orch.Start(context.Background(), contract.StartConfig{Robots: 1, World: "simple", EnvImage: "env"})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestEasyGoLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
+	args := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}, easyGoRuntimeFor(1))
+	if !containsAny(args, "robot_name:=fleet/robot1") {
+		t.Fatalf("args=%v", args)
+	}
+	if !containsAny(args, "serial_number:=robot1") {
+		t.Fatalf("args=%v", args)
 	}
 }
 

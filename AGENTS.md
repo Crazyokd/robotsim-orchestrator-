@@ -7,11 +7,12 @@
 - **本仓**：Gazebo server、world SDF、机器人模型、spawn、GZ `clock`、宿主编排。不解释车端，不起 easygo-app / SLAM / Nav2 / WebApp / 驾驶台 / RViz。
 - **程序**：现有 EasyGo `runtime-sim` + `sim_easygo.launch.py start_gazebo:=false`。由 `--app-image` 传入。程序不读本仓源码，不起 Gazebo server。
 - 两边不共享镜像、不共享 launch、不共享版本号。环境镜像不以 `runtime-sim` 为 `FROM`。运行时不挂 EasyGo 工作区。
-- **契约**：实体与 GZ 前缀 `robotN`（N 从 1）；`GZ_IP=127.0.0.1`；`GZ_PARTITION=easygo_sim`；程序 `ROS_DOMAIN_ID=11+(N-1)`；环境若需要 ROS 则 `ROS_DOMAIN_ID=1`；HTTP `frontend=18088+100N`、`api=18089+100N`。N=1 的 API 是 `:18189`，不是旧单车 `:18089`。
+- **会话契约**：`Session` 只描述 World、Partition、Robot 清单；Robot 只含 `Index`、`Name`、`TopicPrefix`、`Pose`。实体与 GZ topic 前缀默认 `robotN`（N 从 1）；`GZ_IP=127.0.0.1`；`GZ_PARTITION=easygo_sim`。
+- **EasyGoVehicle 实现约定**：程序 `ROS_DOMAIN_ID=11+(N-1)`；环境若需要 ROS 则 `ROS_DOMAIN_ID=1`；HTTP `frontend=18088+100N`、`api=18089+100N`。N=1 的 API 是 `:18189`，不是旧单车 `:18089`。这些不得进入 `internal/contract` 的类型。
 - **入口**：`cmd/simenv` 宿主编排（`start` / `status` / `stop`）；`cmd/simenv-world` 环境容器内世界进程。Docker Engine API 起停容器，不拼 `docker run`。
 - 禁止 `*.sh` 业务入口、Python 编排、把 TypeScript 当本仓实现语言。不包装 `full_sim.sh` / `easygo-sim` / `sim_multi_gazebo.launch.py`。
 - 不嵌进 TP 或 EasyGo CI。操作员 skill：起停环境 `.agents/skills/simenv-run/SKILL.md`。
-- EasyGo 概念只作为程序镜像与契约依赖，不得进入环境实现。
+- EasyGo 概念只作为程序镜像与 `VehiclePort` 边缘实现依赖，不得进入会话契约或环境实现。
 
 ## 改动
 
@@ -20,7 +21,7 @@
 - Go、带类型配置进 struct。非法字段直接失败，不设默认值迁就脏输入。
 - 不做无关重构、格式化或搬文件。只暂存本任务文件，保留用户已有改动。
 - 未发版：禁止兼容和兜底。不做旧字段映射、双路径、legacy 别名，也不用默认值或吞错迁就脏数据。非法输入直接失败；碰到兼容路径就删。
-- 行为变化补 `go test`。本仓测试只测契约算术、编排状态机、世界进程对 clock/实体的等待。不把 EasyGo launch 测试当本仓门禁。
+- 行为变化补 `go test`。本仓测试只测会话契约算术、编排状态机、世界进程对 clock/实体的等待，以及 `VehiclePort` 边缘实现自身的参数算术。
 - worlds / 机器人模型来自 pinned EasyGo 修订，记录在 `deploy/assets/EASYGO_WORLD_SOURCE_SHA`。换 SHA 必须同步镜像 LABEL 与该文件。
 
 ## 验证

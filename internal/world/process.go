@@ -26,8 +26,9 @@ type Transport interface {
 }
 
 type Body struct {
-	Name string
-	Pose contract.Pose
+	Name        string
+	TopicPrefix string
+	Pose        contract.Pose
 }
 
 type Process struct {
@@ -68,7 +69,7 @@ func (p Process) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read model: %w", err)
 		}
-		rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.Pose.Yaw)
+		rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.TopicPrefix, body.Pose.Yaw)
 		if err != nil {
 			return err
 		}

@@ -9,17 +9,6 @@ const (
 	DefaultPartition = "easygo_sim"
 	GZIP             = "127.0.0.1"
 	EnvROSDomainID   = 1
-	HTTPBaseFrontend = 18088
-	HTTPBaseAPI      = 18089
-	HTTPBaseVoice    = 18091
-	HTTPStride       = 100
-	MQTTBase         = 1883
-	ObserveBase      = 8090
-	WebGZWebBase     = 6080
-	WebGZRFBBase     = 5901
-	RVizWebBase      = 6081
-	RVizRFBBase      = 5902
-	ROSDomainBase    = 11
 	SpawnXStride     = 3.0
 	DefaultSpawnZ    = 0.05
 	DefaultWorld     = "simple"
@@ -43,20 +32,10 @@ type Session struct {
 }
 
 type Robot struct {
-	Index        int
-	Name         string
-	Pose         Pose
-	FrontendPort int
-	APIPort      int
-	VoicePort    int
-	MQTTPort     int
-	ObservePort  int
-	WebGZWebPort int
-	WebGZRFBPort int
-	RVizWebPort  int
-	RVizRFBPort  int
-	ROSDomainID  int
-	RuntimeRoot  string
+	Index       int
+	Name        string
+	TopicPrefix string
+	Pose        Pose
 }
 
 type StartConfig struct {
@@ -80,21 +59,12 @@ func NewRobot(index int, pose Pose) (Robot, error) {
 	if pose == (Pose{}) {
 		pose = Pose{X: float64(index-1) * SpawnXStride, Z: DefaultSpawnZ}
 	}
+	name := RobotName(index)
 	return Robot{
-		Index:        index,
-		Name:         RobotName(index),
-		Pose:         pose,
-		FrontendPort: HTTPBaseFrontend + index*HTTPStride,
-		APIPort:      HTTPBaseAPI + index*HTTPStride,
-		VoicePort:    HTTPBaseVoice + index*HTTPStride,
-		MQTTPort:     MQTTBase + index,
-		ObservePort:  ObserveBase + index*HTTPStride,
-		WebGZWebPort: WebGZWebBase + index*HTTPStride,
-		WebGZRFBPort: WebGZRFBBase + index*HTTPStride,
-		RVizWebPort:  RVizWebBase + index*HTTPStride,
-		RVizRFBPort:  RVizRFBBase + index*HTTPStride,
-		ROSDomainID:  ROSDomainBase + (index - 1),
-		RuntimeRoot:  "/sros",
+		Index:       index,
+		Name:        name,
+		TopicPrefix: name,
+		Pose:        pose,
 	}, nil
 }
 
@@ -185,51 +155,13 @@ func (s Session) Validate() error {
 		if strings.TrimSpace(robot.Name) == "" {
 			return fmt.Errorf("robot name must not be empty")
 		}
+		if strings.TrimSpace(robot.TopicPrefix) == "" {
+			return fmt.Errorf("robot topic prefix must not be empty")
+		}
 	}
 	return nil
 }
 
-func (r Robot) LaunchArgs() []string {
-	return []string{
-		"start_gazebo:=false",
-		"use_gz_gui:=false",
-		"use_rviz:=false",
-		"enable_person_follow:=false",
-		"enable_multi_robot_wifi:=true",
-		"robot_name:=" + r.Name,
-		"runtime_root:=" + r.RuntimeRoot,
-		"map_path:=" + r.RuntimeRoot + "/map/",
-		fmt.Sprintf("frontend_port:=%d", r.FrontendPort),
-		fmt.Sprintf("api_port:=%d", r.APIPort),
-		fmt.Sprintf("voice_port:=%d", r.VoicePort),
-		fmt.Sprintf("mqtt_port:=%d", r.MQTTPort),
-		fmt.Sprintf("slam_web_port:=%d", slamWebPort(r.Index)),
-		fmt.Sprintf("observe_port:=%d", r.ObservePort),
-		fmt.Sprintf("webgz_web_port:=%d", r.WebGZWebPort),
-		fmt.Sprintf("webgz_rfb_port:=%d", r.WebGZRFBPort),
-		fmt.Sprintf("webgz_display:=:%d", 10+r.Index*10),
-		"webgz_log_dir:=/tmp/webgz-" + r.Name,
-		fmt.Sprintf("rviz_web_port:=%d", r.RVizWebPort),
-		fmt.Sprintf("rviz_rfb_port:=%d", r.RVizRFBPort),
-		fmt.Sprintf("rviz_display:=:%d", 11+r.Index*10),
-		"rviz_log_dir:=/tmp/rviz-" + r.Name,
-		"serial_number:=" + r.Name,
-		"easygo_app_param_db_path:=" + r.RuntimeRoot + "/db/cfg.db3",
-		"database_url:=sqlite://" + r.RuntimeRoot + "/db/easygo.db?mode=rwc",
-	}
-}
-
-func slamWebPort(index int) int {
-	if index == 1 {
-		return 8088
-	}
-	return 8018 + (index-2)*10
-}
-
 func AppContainer(name string) string {
 	return "simenv-" + name
-}
-
-func CycloneDDSURI() string {
-	return `<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="false" /></Interfaces><AllowMulticast>false</AllowMulticast><DontRoute>true</DontRoute></General><Discovery><Peers><Peer Address="127.0.0.1" /></Peers><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>255</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>`
 }

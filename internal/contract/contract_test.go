@@ -1,6 +1,10 @@
 package contract
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestRobotName(t *testing.T) {
 	if got := RobotName(1); got != "robot1" {
@@ -14,32 +18,23 @@ func TestRobotRejectsNonPositiveIndex(t *testing.T) {
 	}
 }
 
-func TestRobot1MatchesEasyGoMultiOffsetZero(t *testing.T) {
+func TestRobot1UsesNeutralDefaults(t *testing.T) {
 	robot, err := NewRobot(1, Pose{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if robot.Name != "robot1" {
-		t.Fatalf("name=%q", robot.Name)
-	}
-	if robot.FrontendPort != 18188 || robot.APIPort != 18189 {
-		t.Fatalf("ports frontend=%d api=%d", robot.FrontendPort, robot.APIPort)
-	}
-	if robot.ROSDomainID != 11 {
-		t.Fatalf("domain=%d", robot.ROSDomainID)
+	if robot.Name != "robot1" || robot.TopicPrefix != "robot1" {
+		t.Fatalf("robot=%+v", robot)
 	}
 	if robot.Pose != (Pose{X: 0, Y: 0, Z: 0.05, Yaw: 0}) {
 		t.Fatalf("default pose=%+v", robot.Pose)
 	}
 }
 
-func TestRobot2StrideAndPorts(t *testing.T) {
+func TestRobot2Stride(t *testing.T) {
 	robot, err := NewRobot(2, Pose{})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if robot.APIPort != 18289 || robot.ROSDomainID != 12 {
-		t.Fatalf("api=%d domain=%d", robot.APIPort, robot.ROSDomainID)
 	}
 	if robot.Pose.X != 3 {
 		t.Fatalf("x=%v", robot.Pose.X)
@@ -104,40 +99,36 @@ func TestStartConfigBuildsNeutralSession(t *testing.T) {
 	if len(session.Robots) != 2 {
 		t.Fatalf("robots=%+v", session.Robots)
 	}
-	if session.Robots[0].Name != "robot1" || session.Robots[0].Pose.X != 10 || session.Robots[0].APIPort != 18189 {
+	if session.Robots[0].Name != "robot1" || session.Robots[0].TopicPrefix != "robot1" || session.Robots[0].Pose.X != 10 {
 		t.Fatalf("robot1=%+v", session.Robots[0])
 	}
-	if session.Robots[1].Name != "robot2" || session.Robots[1].Pose.X != 20 || session.Robots[1].ROSDomainID != 12 {
+	if session.Robots[1].Name != "robot2" || session.Robots[1].TopicPrefix != "robot2" || session.Robots[1].Pose.X != 20 {
 		t.Fatalf("robot2=%+v", session.Robots[1])
 	}
 }
 
-func TestLaunchArgsAreHeadlessAndNoGazebo(t *testing.T) {
-	robot, err := NewRobot(1, Pose{})
+func TestSessionJSONDoesNotExposeEasyGoRuntime(t *testing.T) {
+	session, err := StartConfig{
+		Robots: 2, World: "simple", AppImage: "img", EnvImage: "env", Partition: DefaultPartition,
+	}.Session()
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := robot.LaunchArgs()
-	want := []string{
-		"start_gazebo:=false",
-		"use_gz_gui:=false",
-		"use_rviz:=false",
-		"robot_name:=robot1",
-		"frontend_port:=18188",
-		"api_port:=18189",
+	raw, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, item := range want {
-		if !contains(args, item) {
-			t.Fatalf("missing %q in %v", item, args)
+	body := string(raw)
+	for _, field := range []string{
+		"APIPort",
+		"FrontendPort",
+		"VoicePort",
+		"MQTTPort",
+		"ROSDomainID",
+		"RuntimeRoot",
+	} {
+		if strings.Contains(body, field) {
+			t.Fatalf("session JSON leaked %s: %s", field, body)
 		}
 	}
-}
-
-func contains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
