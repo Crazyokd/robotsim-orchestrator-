@@ -29,9 +29,20 @@ func run(args []string) error {
 		return err
 	}
 	cfg := contract.StartConfig{Robots: *robotsN, World: *worldName, AppImage: "unused", EnvImage: "unused"}
-	robots, err := cfg.RobotsSpec()
+	session, err := cfg.Session()
 	if err != nil {
 		return err
+	}
+	bodies := make([]world.Body, 0, len(session.Attachments))
+	for _, attachment := range session.Attachments {
+		pose, err := cfg.PoseFor(attachment)
+		if err != nil {
+			return err
+		}
+		if pose == (contract.Pose{}) {
+			pose = contract.Pose{X: float64(attachment.Index-1) * contract.SpawnXStride, Z: contract.DefaultSpawnZ}
+		}
+		bodies = append(bodies, world.Body{Name: attachment.Name, Pose: pose})
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -41,7 +52,7 @@ func run(args []string) error {
 		ReadyPath:  contract.WorldReadyPath,
 		Transport:  world.GZ{},
 		WorldName:  *worldName,
-		Robots:     robots,
+		Bodies:     bodies,
 		Hold: func(ctx context.Context) error {
 			<-ctx.Done()
 			return nil

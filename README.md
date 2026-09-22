@@ -6,6 +6,7 @@
 | --- | --- |
 | [`AGENTS.md`](AGENTS.md) | 仓库规则 |
 | [`docs/superpowers/specs/2026-09-21-simenv-design.md`](docs/superpowers/specs/2026-09-21-simenv-design.md) | 世界 / 程序边界与契约 |
+| [`docs/superpowers/specs/2026-09-21-simenv-framework-design.md`](docs/superpowers/specs/2026-09-21-simenv-framework-design.md) | 框架分层与类型 |
 
 ```text
 go test ./...

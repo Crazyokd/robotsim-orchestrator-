@@ -36,6 +36,15 @@ type Pose struct {
 	X, Y, Z, Yaw float64
 }
 
+type Attachment struct {
+	Index int
+	Name  string
+}
+
+type Session struct {
+	Attachments []Attachment
+}
+
 type Robot struct {
 	Index        int
 	Name         string
@@ -109,6 +118,38 @@ func (c StartConfig) Validate() error {
 		return fmt.Errorf("poses count %d does not match robots %d", len(c.Poses), c.Robots)
 	}
 	return nil
+}
+
+func (c StartConfig) Session() (Session, error) {
+	if err := c.Validate(); err != nil {
+		return Session{}, err
+	}
+	attachments := make([]Attachment, 0, c.Robots)
+	for i := 1; i <= c.Robots; i++ {
+		attachments = append(attachments, Attachment{Index: i, Name: RobotName(i)})
+	}
+	return Session{Attachments: attachments}, nil
+}
+
+func (c StartConfig) RobotFor(attachment Attachment) (Robot, error) {
+	pose, err := c.PoseFor(attachment)
+	if err != nil {
+		return Robot{}, err
+	}
+	return NewRobot(attachment.Index, pose)
+}
+
+func (c StartConfig) PoseFor(attachment Attachment) (Pose, error) {
+	if err := c.Validate(); err != nil {
+		return Pose{}, err
+	}
+	if attachment.Index < 1 || attachment.Index > c.Robots {
+		return Pose{}, fmt.Errorf("attachment index %d outside robot count %d", attachment.Index, c.Robots)
+	}
+	if len(c.Poses) > 0 {
+		return c.Poses[attachment.Index-1], nil
+	}
+	return Pose{}, nil
 }
 
 func (c StartConfig) RobotsSpec() ([]Robot, error) {

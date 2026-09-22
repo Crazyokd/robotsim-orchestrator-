@@ -58,6 +58,81 @@ func (f *fakeEngine) List(_ context.Context) ([]ContainerInfo, error) {
 	return out, nil
 }
 
+type fakeWorldPort struct {
+	started []contract.Session
+	stopped bool
+}
+
+func (f *fakeWorldPort) Start(_ context.Context, session contract.Session) error {
+	f.started = append(f.started, session)
+	return nil
+}
+
+func (f *fakeWorldPort) Ready(context.Context) (world.ReadyReport, error) {
+	return world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}}, nil
+}
+
+func (f *fakeWorldPort) Status(context.Context) (ContainerInfo, world.ReadyReport, error) {
+	return ContainerInfo{Name: contract.WorldContainer, Running: true, Image: "env"}, world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}}, nil
+}
+
+func (f *fakeWorldPort) Stop(context.Context) error {
+	f.stopped = true
+	return nil
+}
+
+type fakeVehiclePort struct {
+	started  []contract.Attachment
+	sessions []contract.Session
+	stopped  bool
+}
+
+func (f *fakeVehiclePort) Start(_ context.Context, session contract.Session, attachment contract.Attachment) error {
+	f.sessions = append(f.sessions, session)
+	f.started = append(f.started, attachment)
+	return nil
+}
+
+func (f *fakeVehiclePort) Status(context.Context) ([]AppStatus, error) {
+	return []AppStatus{
+		{Name: "simenv-robot1", Running: true, APIPort: 18189, Image: "runtime"},
+		{Name: "simenv-robot2", Running: true, APIPort: 18289, Image: "runtime"},
+	}, nil
+}
+
+func (f *fakeVehiclePort) Stop(context.Context) error {
+	f.stopped = true
+	return nil
+}
+
+func TestStartDelegatesThroughWorldAndVehiclePorts(t *testing.T) {
+	worldPort := &fakeWorldPort{}
+	vehiclePort := &fakeVehiclePort{}
+	orch := Orchestrator{World: worldPort, Vehicle: vehiclePort}
+	status, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 2, World: "simple", AppImage: "runtime", EnvImage: "env",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(worldPort.started) != 1 {
+		t.Fatalf("world starts=%d", len(worldPort.started))
+	}
+	want := []contract.Attachment{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}
+	if got := worldPort.started[0].Attachments; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("session=%+v", worldPort.started[0])
+	}
+	if len(vehiclePort.started) != 2 || vehiclePort.started[0] != want[0] || vehiclePort.started[1] != want[1] {
+		t.Fatalf("vehicle starts=%+v", vehiclePort.started)
+	}
+	if vehiclePort.sessions[0].Attachments[1] != want[1] {
+		t.Fatalf("vehicle session=%+v", vehiclePort.sessions[0])
+	}
+	if !status.Connected || len(status.Apps) != 2 {
+		t.Fatalf("status=%+v", status)
+	}
+}
+
 func TestStartWorldThenApp(t *testing.T) {
 	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1"}})
 	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}

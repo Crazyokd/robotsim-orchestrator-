@@ -83,6 +83,31 @@ func TestStartConfigRejectsZeroRobots(t *testing.T) {
 	}
 }
 
+func TestStartConfigBuildsAttachmentSession(t *testing.T) {
+	session, err := StartConfig{
+		Robots:   2,
+		World:    "simple",
+		AppImage: "img",
+		EnvImage: "env",
+		Poses: []Pose{
+			{X: 10, Z: DefaultSpawnZ},
+			{X: 20, Z: DefaultSpawnZ},
+		},
+	}.Session()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Attachment{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}
+	if len(session.Attachments) != len(want) {
+		t.Fatalf("attachments=%+v", session.Attachments)
+	}
+	for i := range want {
+		if session.Attachments[i] != want[i] {
+			t.Fatalf("attachment[%d]=%+v want %+v", i, session.Attachments[i], want[i])
+		}
+	}
+}
+
 func TestLaunchArgsAreHeadlessAndNoGazebo(t *testing.T) {
 	robot, err := NewRobot(1, Pose{})
 	if err != nil {

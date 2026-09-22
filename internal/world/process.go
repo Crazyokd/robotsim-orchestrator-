@@ -25,13 +25,18 @@ type Transport interface {
 	CreateEntity(ctx context.Context, world, name, sdfPath string, pose contract.Pose) error
 }
 
+type Body struct {
+	Name string
+	Pose contract.Pose
+}
+
 type Process struct {
 	AssetsRoot string
 	ModelPath  string
 	ReadyPath  string
 	Transport  Transport
 	WorldName  string
-	Robots     []contract.Robot
+	Bodies     []Body
 	Hold       func(context.Context) error
 }
 
@@ -57,24 +62,24 @@ func (p Process) Run(ctx context.Context) error {
 	if err := p.Transport.WaitClock(ctx); err != nil {
 		return err
 	}
-	names := make([]string, 0, len(p.Robots))
-	for _, robot := range p.Robots {
+	names := make([]string, 0, len(p.Bodies))
+	for _, body := range p.Bodies {
 		sdf, err := os.ReadFile(p.ModelPath)
 		if err != nil {
 			return fmt.Errorf("read model: %w", err)
 		}
-		rewritten, err := RewriteRobotSDF(string(sdf), robot.Name, robot.Pose.Yaw)
+		rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.Pose.Yaw)
 		if err != nil {
 			return err
 		}
-		sdfPath := filepath.Join(os.TempDir(), robot.Name+".sdf")
+		sdfPath := filepath.Join(os.TempDir(), body.Name+".sdf")
 		if err := os.WriteFile(sdfPath, []byte(rewritten), 0o644); err != nil {
 			return err
 		}
-		if err := p.Transport.CreateEntity(ctx, worldSDFName, robot.Name, sdfPath, robot.Pose); err != nil {
+		if err := p.Transport.CreateEntity(ctx, worldSDFName, body.Name, sdfPath, body.Pose); err != nil {
 			return err
 		}
-		names = append(names, robot.Name)
+		names = append(names, body.Name)
 	}
 	report := ReadyReport{World: worldSDFName, Clock: true, Robots: names}
 	if err := writeReady(p.ReadyPath, report); err != nil {

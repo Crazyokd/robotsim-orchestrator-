@@ -53,7 +53,7 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 		ReadyPath:  ready,
 		Transport:  transport,
 		WorldName:  "simple",
-		Robots:     []contract.Robot{{Name: "robot1", Pose: contract.Pose{Z: 0.05}}},
+		Bodies:     []Body{{Name: "robot1", Pose: contract.Pose{Z: 0.05}}},
 		Hold:       func(context.Context) error { return nil },
 	}
 	if err := proc.Run(context.Background()); err != nil {
