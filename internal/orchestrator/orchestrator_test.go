@@ -82,14 +82,12 @@ func (f *fakeWorldPort) Stop(context.Context) error {
 }
 
 type fakeVehiclePort struct {
-	started  []contract.Attachment
 	sessions []contract.Session
 	stopped  bool
 }
 
-func (f *fakeVehiclePort) Start(_ context.Context, session contract.Session, attachment contract.Attachment) error {
+func (f *fakeVehiclePort) Start(_ context.Context, session contract.Session) error {
 	f.sessions = append(f.sessions, session)
-	f.started = append(f.started, attachment)
 	return nil
 }
 
@@ -118,14 +116,13 @@ func TestStartDelegatesThroughWorldAndVehiclePorts(t *testing.T) {
 	if len(worldPort.started) != 1 {
 		t.Fatalf("world starts=%d", len(worldPort.started))
 	}
-	want := []contract.Attachment{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}
-	if got := worldPort.started[0].Attachments; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	if got := worldPort.started[0].Robots; len(got) != 2 || got[0].Name != "robot1" || got[1].Name != "robot2" {
 		t.Fatalf("session=%+v", worldPort.started[0])
 	}
-	if len(vehiclePort.started) != 2 || vehiclePort.started[0] != want[0] || vehiclePort.started[1] != want[1] {
-		t.Fatalf("vehicle starts=%+v", vehiclePort.started)
+	if len(vehiclePort.sessions) != 1 {
+		t.Fatalf("vehicle sessions=%+v", vehiclePort.sessions)
 	}
-	if vehiclePort.sessions[0].Attachments[1] != want[1] {
+	if vehiclePort.sessions[0].Robots[1].Name != "robot2" {
 		t.Fatalf("vehicle session=%+v", vehiclePort.sessions[0])
 	}
 	if !status.Connected || len(status.Apps) != 2 {
@@ -140,6 +137,7 @@ func TestStartWorldThenApp(t *testing.T) {
 	cfg := contract.StartConfig{
 		Robots: 1, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
 		Partition: contract.DefaultPartition, DataRoot: t.TempDir(),
+		Poses: []contract.Pose{{X: 7, Y: 8, Z: contract.DefaultSpawnZ, Yaw: 1.5}},
 	}
 	status, err := orch.Start(context.Background(), cfg)
 	if err != nil {
@@ -160,6 +158,13 @@ func TestStartWorldThenApp(t *testing.T) {
 	}
 	if containsAny(worldSpec.Command, "easygo-app", "slam", "nav2") {
 		t.Fatal("world command must not start the vehicle stack")
+	}
+	worldSession := sessionFromCommand(t, worldSpec.Command)
+	if worldSession.World != "simple" || worldSession.Partition != contract.DefaultPartition {
+		t.Fatalf("world session=%+v", worldSession)
+	}
+	if len(worldSession.Robots) != 1 || worldSession.Robots[0].Pose.X != 7 || worldSession.Robots[0].Name != "robot1" {
+		t.Fatalf("world robots=%+v", worldSession.Robots)
 	}
 	appSpec := engine.started[1]
 	if appSpec.Name != "simenv-robot1" {
@@ -204,4 +209,19 @@ func containsAny(items []string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func sessionFromCommand(t *testing.T, command []string) contract.Session {
+	t.Helper()
+	for i, item := range command {
+		if item == "--session" && i+1 < len(command) {
+			var session contract.Session
+			if err := json.Unmarshal([]byte(command[i+1]), &session); err != nil {
+				t.Fatal(err)
+			}
+			return session
+		}
+	}
+	t.Fatalf("missing --session in %v", command)
+	return contract.Session{}
 }

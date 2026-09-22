@@ -83,12 +83,13 @@ func TestStartConfigRejectsZeroRobots(t *testing.T) {
 	}
 }
 
-func TestStartConfigBuildsAttachmentSession(t *testing.T) {
+func TestStartConfigBuildsNeutralSession(t *testing.T) {
 	session, err := StartConfig{
-		Robots:   2,
-		World:    "simple",
-		AppImage: "img",
-		EnvImage: "env",
+		Robots:    2,
+		World:     "simple",
+		AppImage:  "img",
+		EnvImage:  "env",
+		Partition: DefaultPartition,
 		Poses: []Pose{
 			{X: 10, Z: DefaultSpawnZ},
 			{X: 20, Z: DefaultSpawnZ},
@@ -97,14 +98,17 @@ func TestStartConfigBuildsAttachmentSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Attachment{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}
-	if len(session.Attachments) != len(want) {
-		t.Fatalf("attachments=%+v", session.Attachments)
+	if session.World != "simple" || session.Partition != DefaultPartition {
+		t.Fatalf("session=%+v", session)
 	}
-	for i := range want {
-		if session.Attachments[i] != want[i] {
-			t.Fatalf("attachment[%d]=%+v want %+v", i, session.Attachments[i], want[i])
-		}
+	if len(session.Robots) != 2 {
+		t.Fatalf("robots=%+v", session.Robots)
+	}
+	if session.Robots[0].Name != "robot1" || session.Robots[0].Pose.X != 10 || session.Robots[0].APIPort != 18189 {
+		t.Fatalf("robot1=%+v", session.Robots[0])
+	}
+	if session.Robots[1].Name != "robot2" || session.Robots[1].Pose.X != 20 || session.Robots[1].ROSDomainID != 12 {
+		t.Fatalf("robot2=%+v", session.Robots[1])
 	}
 }
 

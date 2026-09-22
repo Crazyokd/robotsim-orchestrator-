@@ -67,7 +67,7 @@ type WorldPort interface {
 }
 
 type VehiclePort interface {
-	Start(ctx context.Context, session contract.Session, attachment contract.Attachment) error
+	Start(ctx context.Context, session contract.Session) error
 	Status(ctx context.Context) ([]AppStatus, error)
 	Stop(ctx context.Context) error
 }
@@ -97,10 +97,8 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if _, err := worldPort.Ready(ctx); err != nil {
 		return Status{}, err
 	}
-	for _, attachment := range session.Attachments {
-		if err := vehiclePort.Start(ctx, session, attachment); err != nil {
-			return Status{}, err
-		}
+	if err := vehiclePort.Start(ctx, session); err != nil {
+		return Status{}, err
 	}
 	return statusFromPorts(ctx, worldPort, vehiclePort)
 }
@@ -164,15 +162,22 @@ type DockerWorld struct {
 }
 
 func (w DockerWorld) Start(ctx context.Context, session contract.Session) error {
+	if err := session.Validate(); err != nil {
+		return err
+	}
 	cfg := withDefaults(w.Config)
-	worldCmd := []string{"/usr/local/bin/simenv-world", "--world", cfg.World, "--robots", strconv.Itoa(len(session.Attachments))}
+	rawSession, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	worldCmd := []string{"/usr/local/bin/simenv-world", "--session", string(rawSession)}
 	return w.Engine.Start(ctx, ContainerSpec{
 		Name:    contract.WorldContainer,
 		Image:   cfg.EnvImage,
 		Command: worldCmd,
 		Env: map[string]string{
 			"GZ_IP":         contract.GZIP,
-			"GZ_PARTITION":  cfg.Partition,
+			"GZ_PARTITION":  session.Partition,
 			"ROS_DOMAIN_ID": strconv.Itoa(contract.EnvROSDomainID),
 		},
 		Network: "host",
@@ -203,12 +208,11 @@ type EasyGoVehicle struct {
 	Config contract.StartConfig
 }
 
-func (v EasyGoVehicle) Start(ctx context.Context, _ contract.Session, attachment contract.Attachment) error {
-	cfg := withDefaults(v.Config)
-	robot, err := cfg.RobotFor(attachment)
-	if err != nil {
+func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session) error {
+	if err := session.Validate(); err != nil {
 		return err
 	}
+	cfg := withDefaults(v.Config)
 	dataRoot := cfg.DataRoot
 	if dataRoot == "" {
 		cache, err := os.UserCacheDir()
@@ -217,21 +221,26 @@ func (v EasyGoVehicle) Start(ctx context.Context, _ contract.Session, attachment
 		}
 		dataRoot = filepath.Join(cache, "simenv")
 	}
-	hostSros := filepath.Join(dataRoot, robot.Name)
-	if err := os.MkdirAll(hostSros, 0o755); err != nil {
-		return err
+	for _, robot := range session.Robots {
+		hostSros := filepath.Join(dataRoot, robot.Name)
+		if err := os.MkdirAll(hostSros, 0o755); err != nil {
+			return err
+		}
+		cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, robot.LaunchArgs()...)
+		if err := v.Engine.Start(ctx, ContainerSpec{
+			Name:    contract.AppContainer(robot.Name),
+			Image:   cfg.AppImage,
+			Command: cmd,
+			Env:     appEnv(robot, session),
+			Binds:   []string{hostSros + ":/sros"},
+			Network: "host",
+			Ipc:     "host",
+			Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleApp},
+		}); err != nil {
+			return err
+		}
 	}
-	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, robot.LaunchArgs()...)
-	return v.Engine.Start(ctx, ContainerSpec{
-		Name:    contract.AppContainer(robot.Name),
-		Image:   cfg.AppImage,
-		Command: cmd,
-		Env:     appEnv(robot, cfg),
-		Binds:   []string{hostSros + ":/sros"},
-		Network: "host",
-		Ipc:     "host",
-		Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleApp},
-	})
+	return nil
 }
 
 func (v EasyGoVehicle) Status(ctx context.Context) ([]AppStatus, error) {
@@ -333,20 +342,20 @@ func readReady(ctx context.Context, engine Engine) (world.ReadyReport, error) {
 	return report, nil
 }
 
-func appEnv(robot contract.Robot, cfg contract.StartConfig) map[string]string {
+func appEnv(robot contract.Robot, session contract.Session) map[string]string {
 	return map[string]string{
 		"ROS_DOMAIN_ID":                 strconv.Itoa(robot.ROSDomainID),
 		"ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
 		"RMW_IMPLEMENTATION":            "rmw_cyclonedds_cpp",
 		"CYCLONEDDS_URI":                contract.CycloneDDSURI(),
 		"GZ_IP":                         contract.GZIP,
-		"GZ_PARTITION":                  cfg.Partition,
+		"GZ_PARTITION":                  session.Partition,
 		"SERIAL_NUMBER":                 robot.Name,
 		"MQTT_BROKER_PORT":              strconv.Itoa(robot.MQTTPort),
 		"BACKEND_PORT":                  strconv.Itoa(robot.VoicePort),
 		"PARAM_DB_PATH":                 robot.RuntimeRoot + "/db/cfg.db3",
 		"DATABASE_URL":                  "sqlite://" + robot.RuntimeRoot + "/db/easygo.db?mode=rwc",
-		"EASYGO_SIM_WORLD":              cfg.World,
+		"EASYGO_SIM_WORLD":              session.World,
 		"EASYGO_SIM_APP_ROOT":           robot.RuntimeRoot + "/easygo-app",
 		"EASYGO_WEBAPP_DIR":             robot.RuntimeRoot + "/webapp",
 	}

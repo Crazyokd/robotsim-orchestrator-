@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -21,28 +22,25 @@ func main() {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("simenv-world", flag.ContinueOnError)
-	worldName := fs.String("world", contract.DefaultWorld, "")
-	robotsN := fs.Int("robots", 1, "")
+	sessionText := fs.String("session", "", "")
 	assets := fs.String("assets", "/opt/simenv", "")
 	model := fs.String("model", "/opt/simenv/models/easygo_bj_bkn_description/models/easygo_bj_bkn_model.sdf", "")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg := contract.StartConfig{Robots: *robotsN, World: *worldName, AppImage: "unused", EnvImage: "unused"}
-	session, err := cfg.Session()
-	if err != nil {
+	if *sessionText == "" {
+		return fmt.Errorf("session must not be empty")
+	}
+	var session contract.Session
+	if err := json.Unmarshal([]byte(*sessionText), &session); err != nil {
 		return err
 	}
-	bodies := make([]world.Body, 0, len(session.Attachments))
-	for _, attachment := range session.Attachments {
-		pose, err := cfg.PoseFor(attachment)
-		if err != nil {
-			return err
-		}
-		if pose == (contract.Pose{}) {
-			pose = contract.Pose{X: float64(attachment.Index-1) * contract.SpawnXStride, Z: contract.DefaultSpawnZ}
-		}
-		bodies = append(bodies, world.Body{Name: attachment.Name, Pose: pose})
+	if err := session.Validate(); err != nil {
+		return err
+	}
+	bodies := make([]world.Body, 0, len(session.Robots))
+	for _, robot := range session.Robots {
+		bodies = append(bodies, world.Body{Name: robot.Name, Pose: robot.Pose})
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -51,7 +49,7 @@ func run(args []string) error {
 		ModelPath:  *model,
 		ReadyPath:  contract.WorldReadyPath,
 		Transport:  world.GZ{},
-		WorldName:  *worldName,
+		WorldName:  session.World,
 		Bodies:     bodies,
 		Hold: func(ctx context.Context) error {
 			<-ctx.Done()

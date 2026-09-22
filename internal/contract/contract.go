@@ -36,13 +36,10 @@ type Pose struct {
 	X, Y, Z, Yaw float64
 }
 
-type Attachment struct {
-	Index int
-	Name  string
-}
-
 type Session struct {
-	Attachments []Attachment
+	World     string
+	Partition string
+	Robots    []Robot
 }
 
 type Robot struct {
@@ -124,30 +121,34 @@ func (c StartConfig) Session() (Session, error) {
 	if err := c.Validate(); err != nil {
 		return Session{}, err
 	}
-	attachments := make([]Attachment, 0, c.Robots)
-	for i := 1; i <= c.Robots; i++ {
-		attachments = append(attachments, Attachment{Index: i, Name: RobotName(i)})
+	robots, err := c.RobotsSpec()
+	if err != nil {
+		return Session{}, err
 	}
-	return Session{Attachments: attachments}, nil
+	session := Session{World: c.World, Partition: c.Partition, Robots: robots}
+	if err := session.Validate(); err != nil {
+		return Session{}, err
+	}
+	return session, nil
 }
 
-func (c StartConfig) RobotFor(attachment Attachment) (Robot, error) {
-	pose, err := c.PoseFor(attachment)
+func (c StartConfig) RobotFor(index int) (Robot, error) {
+	pose, err := c.PoseFor(index)
 	if err != nil {
 		return Robot{}, err
 	}
-	return NewRobot(attachment.Index, pose)
+	return NewRobot(index, pose)
 }
 
-func (c StartConfig) PoseFor(attachment Attachment) (Pose, error) {
+func (c StartConfig) PoseFor(index int) (Pose, error) {
 	if err := c.Validate(); err != nil {
 		return Pose{}, err
 	}
-	if attachment.Index < 1 || attachment.Index > c.Robots {
-		return Pose{}, fmt.Errorf("attachment index %d outside robot count %d", attachment.Index, c.Robots)
+	if index < 1 || index > c.Robots {
+		return Pose{}, fmt.Errorf("robot index %d outside robot count %d", index, c.Robots)
 	}
 	if len(c.Poses) > 0 {
-		return c.Poses[attachment.Index-1], nil
+		return c.Poses[index-1], nil
 	}
 	return Pose{}, nil
 }
@@ -158,17 +159,34 @@ func (c StartConfig) RobotsSpec() ([]Robot, error) {
 	}
 	robots := make([]Robot, 0, c.Robots)
 	for i := 1; i <= c.Robots; i++ {
-		var pose Pose
-		if len(c.Poses) > 0 {
-			pose = c.Poses[i-1]
-		}
-		robot, err := NewRobot(i, pose)
+		robot, err := c.RobotFor(i)
 		if err != nil {
 			return nil, err
 		}
 		robots = append(robots, robot)
 	}
 	return robots, nil
+}
+
+func (s Session) Validate() error {
+	if strings.TrimSpace(s.World) == "" {
+		return fmt.Errorf("session world must not be empty")
+	}
+	if strings.TrimSpace(s.Partition) == "" {
+		return fmt.Errorf("session partition must not be empty")
+	}
+	if len(s.Robots) < 1 {
+		return fmt.Errorf("session robots must not be empty")
+	}
+	for _, robot := range s.Robots {
+		if robot.Index < 1 {
+			return fmt.Errorf("robot index must be >= 1")
+		}
+		if strings.TrimSpace(robot.Name) == "" {
+			return fmt.Errorf("robot name must not be empty")
+		}
+	}
+	return nil
 }
 
 func (r Robot) LaunchArgs() []string {
