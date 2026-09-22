@@ -67,7 +67,7 @@ type WorldPort interface {
 }
 
 type VehiclePort interface {
-	Start(ctx context.Context, session contract.Session) error
+	Start(ctx context.Context, session contract.Session, robot contract.Robot) error
 	Status(ctx context.Context) ([]AppStatus, error)
 	Stop(ctx context.Context) error
 }
@@ -97,8 +97,10 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if _, err := worldPort.Ready(ctx); err != nil {
 		return Status{}, err
 	}
-	if err := vehiclePort.Start(ctx, session); err != nil {
-		return Status{}, err
+	for _, robot := range session.Robots {
+		if err := vehiclePort.Start(ctx, session, robot); err != nil {
+			return Status{}, err
+		}
 	}
 	return statusFromPorts(ctx, worldPort, vehiclePort)
 }
@@ -208,7 +210,7 @@ type EasyGoVehicle struct {
 	Config contract.StartConfig
 }
 
-func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session) error {
+func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session, robot contract.Robot) error {
 	if err := session.Validate(); err != nil {
 		return err
 	}
@@ -221,24 +223,22 @@ func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session) erro
 		}
 		dataRoot = filepath.Join(cache, "simenv")
 	}
-	for _, robot := range session.Robots {
-		hostSros := filepath.Join(dataRoot, robot.Name)
-		if err := os.MkdirAll(hostSros, 0o755); err != nil {
-			return err
-		}
-		cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, robot.LaunchArgs()...)
-		if err := v.Engine.Start(ctx, ContainerSpec{
-			Name:    contract.AppContainer(robot.Name),
-			Image:   cfg.AppImage,
-			Command: cmd,
-			Env:     appEnv(robot, session),
-			Binds:   []string{hostSros + ":/sros"},
-			Network: "host",
-			Ipc:     "host",
-			Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleApp},
-		}); err != nil {
-			return err
-		}
+	hostSros := filepath.Join(dataRoot, robot.Name)
+	if err := os.MkdirAll(hostSros, 0o755); err != nil {
+		return err
+	}
+	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, robot.LaunchArgs()...)
+	if err := v.Engine.Start(ctx, ContainerSpec{
+		Name:    contract.AppContainer(robot.Name),
+		Image:   cfg.AppImage,
+		Command: cmd,
+		Env:     appEnv(robot, session),
+		Binds:   []string{hostSros + ":/sros"},
+		Network: "host",
+		Ipc:     "host",
+		Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleApp},
+	}); err != nil {
+		return err
 	}
 	return nil
 }

@@ -83,11 +83,13 @@ func (f *fakeWorldPort) Stop(context.Context) error {
 
 type fakeVehiclePort struct {
 	sessions []contract.Session
+	robots   []contract.Robot
 	stopped  bool
 }
 
-func (f *fakeVehiclePort) Start(_ context.Context, session contract.Session) error {
+func (f *fakeVehiclePort) Start(_ context.Context, session contract.Session, robot contract.Robot) error {
 	f.sessions = append(f.sessions, session)
+	f.robots = append(f.robots, robot)
 	return nil
 }
 
@@ -119,8 +121,11 @@ func TestStartDelegatesThroughWorldAndVehiclePorts(t *testing.T) {
 	if got := worldPort.started[0].Robots; len(got) != 2 || got[0].Name != "robot1" || got[1].Name != "robot2" {
 		t.Fatalf("session=%+v", worldPort.started[0])
 	}
-	if len(vehiclePort.sessions) != 1 {
+	if len(vehiclePort.sessions) != 2 {
 		t.Fatalf("vehicle sessions=%+v", vehiclePort.sessions)
+	}
+	if len(vehiclePort.robots) != 2 || vehiclePort.robots[0].Name != "robot1" || vehiclePort.robots[1].Name != "robot2" {
+		t.Fatalf("vehicle robots=%+v", vehiclePort.robots)
 	}
 	if vehiclePort.sessions[0].Robots[1].Name != "robot2" {
 		t.Fatalf("vehicle session=%+v", vehiclePort.sessions[0])
