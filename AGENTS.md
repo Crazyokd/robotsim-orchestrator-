@@ -32,11 +32,11 @@
 ## Git
 
 - Conventional Commits。一提交一逻辑。不提交密钥、生成物、运行时数据或无关文件。
-- 禁止直推 `main` / `origin/main`。进入 `main` 必须走 GitLab MR。禁止在本地 `checkout main` 后提交再推，禁止 `git push origin HEAD:main`。
-- 开发前 / 推送前：`git fetch origin`，功能分支 rebase `origin/main`。rebase 改写了已推送功能分支时，只对该分支 `--force-with-lease`。
-- 「提交」：只在功能分支落 commit，不推 `main`。
-- 「提交&push」：rebase 后只 push 功能分支。
-- 「提交MR」：rebase 后 push 功能分支，`glab mr create`（已有则更新）开向 `main`。不要本地合 `main`。开完或更新后跟到 CI 绿；红了修、再推，直到 pipeline success。未绿不算就绪。
+- 默认在 `main` 上直接开发、提交并 push `origin main`。
+- 开发前 / 推送前：`git fetch origin`，`main` 先 fast-forward 到 `origin/main`，再提交已验证改动。
+- 「提交」：在当前 `main` 落 commit。
+- 「提交&push」：提交后 push `origin main`。
+- 「提交MR」：仅在用户明确要求走 MR 时使用；从功能分支 rebase `origin/main` 后 push，并 `glab mr create`（已有则更新）开向 `main`。开完或更新后跟到 CI 绿；红了修、再推，直到 pipeline success。未绿不算就绪。
 - 一份 MR 可含多次提交。同一件事堆同一分支，不要为合入压成一颗，也不要 squash 掉逻辑提交。
-- `main` 线性：MR 只允许快进。禁止 `--no-ff`、`merge:`、在 `main` 上 pull 出 merge。禁止 force-push `main`。
+- `main` 线性：只允许 fast-forward 或普通线性提交。禁止 `--no-ff`、`merge:`、在 `main` 上 pull 出 merge。禁止 force-push `main`。
 - 未要求不删功能分支。
