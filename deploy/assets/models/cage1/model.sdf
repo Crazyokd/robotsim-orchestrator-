@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="cage1">
+    <static>true</static>
+    <link name="link">
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://cage1/meshes/cage1.glb</uri>
+            <scale>1 1 1</scale>
+          </mesh>
+        </geometry>
+      </visual>
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>1.3 1.3 1.8</size>
+          </box>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass>1.0</mass>
+        <inertia>
+          <ixx>0.1</ixx>
+          <iyy>0.1</iyy>
+          <izz>0.1</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+    </link>
+  </model>
+</sdf>
