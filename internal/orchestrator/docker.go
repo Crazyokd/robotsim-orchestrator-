@@ -108,7 +108,8 @@ func (d DockerEngine) Inspect(ctx context.Context, name string) (ContainerInfo, 
 			Running bool `json:"Running"`
 		} `json:"State"`
 		Config struct {
-			Image string `json:"Image"`
+			Image  string            `json:"Image"`
+			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
 	}
 	if err := d.json(ctx, http.MethodGet, "/containers/"+url.PathEscape(name)+"/json", nil, &raw); err != nil {
@@ -122,6 +123,7 @@ func (d DockerEngine) Inspect(ctx context.Context, name string) (ContainerInfo, 
 		ID:      raw.ID,
 		Image:   raw.Config.Image,
 		Running: raw.State.Running,
+		Labels:  raw.Config.Labels,
 	}, nil
 }
 
@@ -149,11 +151,12 @@ func (d DockerEngine) List(ctx context.Context) ([]ContainerInfo, error) {
 	query.Set("all", "true")
 	query.Set("filters", fmt.Sprintf(`{"label":["%s=true"]}`, contract.LabelManaged))
 	var items []struct {
-		ID     string   `json:"Id"`
-		Names  []string `json:"Names"`
-		Image  string   `json:"Image"`
-		State  string   `json:"State"`
-		Status string   `json:"Status"`
+		ID     string            `json:"Id"`
+		Names  []string          `json:"Names"`
+		Image  string            `json:"Image"`
+		State  string            `json:"State"`
+		Status string            `json:"Status"`
+		Labels map[string]string `json:"Labels"`
 	}
 	if err := d.json(ctx, http.MethodGet, "/containers/json?"+query.Encode(), nil, &items); err != nil {
 		return nil, err
@@ -164,7 +167,9 @@ func (d DockerEngine) List(ctx context.Context) ([]ContainerInfo, error) {
 		if len(item.Names) > 0 {
 			name = strings.TrimPrefix(item.Names[0], "/")
 		}
-		out = append(out, ContainerInfo{Name: name, ID: item.ID, Image: item.Image, Running: item.State == "running"})
+		out = append(out, ContainerInfo{
+			Name: name, ID: item.ID, Image: item.Image, Running: item.State == "running", Labels: item.Labels,
+		})
 	}
 	return out, nil
 }

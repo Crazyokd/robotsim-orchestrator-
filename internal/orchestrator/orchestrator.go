@@ -31,6 +31,8 @@ const (
 	easyGoROSDomainBase    = 11
 	easyGoRuntimeRoot      = "/sros"
 	hostGPUDevice          = "/dev/dri"
+	vehicleRobotLabel      = "simenv.robot"
+	vehicleIndexLabel      = "simenv.robot.index"
 )
 
 type ContainerSpec struct {
@@ -50,6 +52,7 @@ type ContainerInfo struct {
 	ID      string
 	Image   string
 	Running bool
+	Labels  map[string]string
 }
 
 type Engine interface {
@@ -128,21 +131,40 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	}
 	worldPort := o.worldPort(cfg)
 	vehicleFactory := o.vehicleFactory(cfg)
-	if err := worldPort.Start(ctx, session); err != nil {
+	existingVehicles, err := vehicleFactory.Discover(ctx)
+	if err != nil {
 		return Status{}, err
 	}
-	if _, err := worldPort.Ready(ctx); err != nil {
+	if err := stopVehiclePorts(ctx, existingVehicles); err != nil {
 		return Status{}, err
 	}
 	vehiclePorts := make([]VehiclePort, 0, len(session.Robots))
+	rollback := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var cleanupErr error
+		cleanupErr = errors.Join(cleanupErr, stopVehiclePorts(cleanupCtx, vehiclePorts))
+		cleanupErr = errors.Join(cleanupErr, worldPort.Stop(cleanupCtx))
+		return cleanupErr
+	}
+	if err := worldPort.Start(ctx, session); err != nil {
+		return Status{}, errors.Join(err, rollback())
+	}
+	if _, err := worldPort.Ready(ctx); err != nil {
+		return Status{}, errors.Join(err, rollback())
+	}
 	for _, robot := range session.Robots {
 		vehiclePort := vehicleFactory.New(session, robot)
-		if err := vehiclePort.Start(ctx); err != nil {
-			return Status{}, err
-		}
 		vehiclePorts = append(vehiclePorts, vehiclePort)
+		if err := vehiclePort.Start(ctx); err != nil {
+			return Status{}, errors.Join(err, rollback())
+		}
 	}
-	return statusFromPorts(ctx, worldPort, vehiclePorts)
+	status, err := statusFromPorts(ctx, worldPort, vehiclePorts)
+	if err != nil {
+		return Status{}, errors.Join(err, rollback())
+	}
+	return status, nil
 }
 
 func (o Orchestrator) Stop(ctx context.Context) error {
@@ -150,16 +172,10 @@ func (o Orchestrator) Stop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var first error
-	for _, vehiclePort := range vehiclePorts {
-		if err := vehiclePort.Stop(ctx); err != nil && first == nil {
-			first = err
-		}
-	}
-	if err := o.worldPort(contract.StartConfig{}).Stop(ctx); err != nil && first == nil {
-		first = err
-	}
-	return first
+	return errors.Join(
+		stopVehiclePorts(ctx, vehiclePorts),
+		o.worldPort(contract.StartConfig{}).Stop(ctx),
+	)
 }
 
 func (o Orchestrator) Status(ctx context.Context) (Status, error) {
@@ -209,6 +225,14 @@ func (o Orchestrator) vehicleFactory(cfg contract.StartConfig) VehiclePortFactor
 		return o.VehicleFactory
 	}
 	return EasyGoVehicleFactory{Engine: o.Engine, Config: cfg}
+}
+
+func stopVehiclePorts(ctx context.Context, vehiclePorts []VehiclePort) error {
+	var stopErr error
+	for i := len(vehiclePorts) - 1; i >= 0; i-- {
+		stopErr = errors.Join(stopErr, vehiclePorts[i].Stop(ctx))
+	}
+	return stopErr
 }
 
 type DockerWorld struct {
@@ -281,7 +305,10 @@ func (f EasyGoVehicleFactory) Discover(ctx context.Context) ([]VehiclePort, erro
 	}
 	ports := make([]VehiclePort, 0, len(infos))
 	for _, info := range infos {
-		robot, ok := robotFromContainerName(info.Name)
+		if info.Labels[contract.LabelManaged] != "true" || info.Labels[contract.LabelRole] != contract.RoleApp {
+			continue
+		}
+		robot, ok := robotFromLabels(info.Labels)
 		if !ok {
 			continue
 		}
@@ -290,18 +317,15 @@ func (f EasyGoVehicleFactory) Discover(ctx context.Context) ([]VehiclePort, erro
 	return ports, nil
 }
 
-func robotFromContainerName(name string) (contract.Robot, bool) {
-	const prefix = "simenv-robot"
-	indexText := strings.TrimPrefix(name, prefix)
-	if indexText == name {
-		return contract.Robot{}, false
-	}
+func robotFromLabels(labels map[string]string) (contract.Robot, bool) {
+	name := strings.TrimSpace(labels[vehicleRobotLabel])
+	indexText := strings.TrimSpace(labels[vehicleIndexLabel])
 	index, err := strconv.Atoi(indexText)
-	if err != nil || index < 1 {
+	if err != nil || index < 1 || name != contract.RobotName(index) {
 		return contract.Robot{}, false
 	}
 	robot, err := contract.NewRobot(index, contract.Pose{})
-	if err != nil || contract.AppContainer(robot.Name) != name {
+	if err != nil {
 		return contract.Robot{}, false
 	}
 	return robot, true
@@ -344,7 +368,12 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 		Network: "host",
 		Ipc:     "host",
 		Devices: guiDevices(useRviz || useGzGui),
-		Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleApp},
+		Labels: map[string]string{
+			contract.LabelManaged: "true",
+			contract.LabelRole:    contract.RoleApp,
+			vehicleRobotLabel:     v.Robot.Name,
+			vehicleIndexLabel:     strconv.Itoa(v.Robot.Index),
+		},
 	}); err != nil {
 		return err
 	}

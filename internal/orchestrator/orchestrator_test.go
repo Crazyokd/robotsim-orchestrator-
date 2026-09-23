@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,7 +25,9 @@ func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {
 
 func (f *fakeEngine) Start(_ context.Context, spec ContainerSpec) error {
 	f.started = append(f.started, spec)
-	f.infos[spec.Name] = ContainerInfo{Name: spec.Name, Running: true, Image: spec.Image, ID: spec.Name + "-id"}
+	f.infos[spec.Name] = ContainerInfo{
+		Name: spec.Name, Running: true, Image: spec.Image, ID: spec.Name + "-id", Labels: spec.Labels,
+	}
 	return nil
 }
 
@@ -82,16 +86,18 @@ func (f *fakeWorldPort) Stop(context.Context) error {
 }
 
 type fakeVehiclePort struct {
-	session contract.Session
-	robot   contract.Robot
-	status  AppStatus
-	started bool
-	stopped bool
+	session   contract.Session
+	robot     contract.Robot
+	status    AppStatus
+	started   bool
+	stopped   bool
+	startErr  error
+	stopOrder *[]string
 }
 
 func (f *fakeVehiclePort) Start(context.Context) error {
 	f.started = true
-	return nil
+	return f.startErr
 }
 
 func (f *fakeVehiclePort) Status(context.Context) (AppStatus, error) {
@@ -100,11 +106,16 @@ func (f *fakeVehiclePort) Status(context.Context) (AppStatus, error) {
 
 func (f *fakeVehiclePort) Stop(context.Context) error {
 	f.stopped = true
+	if f.stopOrder != nil {
+		*f.stopOrder = append(*f.stopOrder, f.robot.Name)
+	}
 	return nil
 }
 
 type fakeVehicleFactory struct {
-	ports []*fakeVehiclePort
+	ports     []*fakeVehiclePort
+	failRobot string
+	stopOrder []string
 }
 
 func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
@@ -117,6 +128,10 @@ func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot)
 			APIPort: easyGoRuntimeFor(robot.Index).apiPort,
 			Image:   "runtime",
 		},
+		stopOrder: &f.stopOrder,
+	}
+	if robot.Name == f.failRobot {
+		port.startErr = errors.New("vehicle start failed")
 	}
 	f.ports = append(f.ports, port)
 	return port
@@ -209,6 +224,9 @@ func TestStartWorldThenApp(t *testing.T) {
 			t.Fatalf("app command missing %s: %v", arg, appSpec.Command)
 		}
 	}
+	if appSpec.Labels[vehicleRobotLabel] != "robot1" || appSpec.Labels[vehicleIndexLabel] != "1" {
+		t.Fatalf("app labels=%v", appSpec.Labels)
+	}
 	if containsAny(appSpec.Command, "start_gazebo:=true") {
 		t.Fatalf("app command=%v", appSpec.Command)
 	}
@@ -220,8 +238,14 @@ func TestStartWorldThenApp(t *testing.T) {
 func TestStatusAggregatesIndependentVehiclePorts(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]ContainerInfo{
 		contract.WorldContainer: {Name: contract.WorldContainer, Running: true, Image: "env"},
-		"simenv-robot1":         {Name: "simenv-robot1", Running: true, Image: "runtime-1"},
-		"simenv-robot2":         {Name: "simenv-robot2", Running: false, Image: "runtime-2"},
+		"simenv-robot1": {
+			Name: "simenv-robot1", Running: true, Image: "runtime-1",
+			Labels: appLabels("robot1", 1),
+		},
+		"simenv-robot2": {
+			Name: "simenv-robot2", Running: false, Image: "runtime-2",
+			Labels: appLabels("robot2", 2),
+		},
 	}}
 	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}})
 	engine.ready = string(report)
@@ -236,6 +260,49 @@ func TestStatusAggregatesIndependentVehiclePorts(t *testing.T) {
 	}
 	if status.Apps[0].Name == status.Apps[1].Name {
 		t.Fatalf("apps=%+v", status.Apps)
+	}
+}
+
+func TestStartRollsBackWorldAndStartedVehicles(t *testing.T) {
+	worldPort := &fakeWorldPort{}
+	vehicleFactory := &fakeVehicleFactory{failRobot: "robot2"}
+	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory}
+
+	_, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 2, World: "simple", AppImage: "runtime", EnvImage: "env",
+	})
+	if err == nil {
+		t.Fatal("expected vehicle start error")
+	}
+	if !worldPort.stopped {
+		t.Fatal("world was not rolled back")
+	}
+	if len(vehicleFactory.ports) != 2 {
+		t.Fatalf("ports=%d", len(vehicleFactory.ports))
+	}
+	if !vehicleFactory.ports[0].stopped || !vehicleFactory.ports[1].stopped {
+		t.Fatalf("vehicles were not rolled back: %+v", vehicleFactory.ports)
+	}
+	if got, want := strings.Join(vehicleFactory.stopOrder, ","), "robot2,robot1"; got != want {
+		t.Fatalf("rollback order=%q, want %q", got, want)
+	}
+}
+
+func TestStartStopsPreviouslyDiscoveredVehicles(t *testing.T) {
+	stale := &fakeVehiclePort{
+		robot:  contract.Robot{Index: 2, Name: "robot2", TopicPrefix: "robot2"},
+		status: AppStatus{Name: "simenv-robot2"},
+	}
+	vehicleFactory := &fakeVehicleFactory{ports: []*fakeVehiclePort{stale}}
+	orch := Orchestrator{World: &fakeWorldPort{}, VehicleFactory: vehicleFactory}
+
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !stale.stopped {
+		t.Fatal("stale vehicle was not stopped")
 	}
 }
 
@@ -280,7 +347,10 @@ func TestEasyGoLaunchTogglesViewersIndependently(t *testing.T) {
 func TestStopStopsWorldAndApps(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]ContainerInfo{
 		contract.WorldContainer: {Name: contract.WorldContainer, Running: true},
-		"simenv-robot1":         {Name: "simenv-robot1", Running: true},
+		"simenv-robot1": {
+			Name: "simenv-robot1", Running: true,
+			Labels: appLabels("robot1", 1),
+		},
 	}}
 	orch := Orchestrator{Engine: engine}
 	if err := orch.Stop(context.Background()); err != nil {
@@ -320,9 +390,29 @@ func TestEasyGoVehicleOnlyManagesItsRobot(t *testing.T) {
 func TestEasyGoVehicleFactoryDiscoversOnlyRobotContainers(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]ContainerInfo{
 		contract.WorldContainer: {Name: contract.WorldContainer, Running: true},
-		"simenv-robot1":         {Name: "simenv-robot1", Running: true},
-		"simenv-robot02":        {Name: "simenv-robot02", Running: true},
-		"simenv-robot2-debug":   {Name: "simenv-robot2-debug", Running: true},
+		"legacy-app-name": {
+			Name:    "legacy-app-name",
+			Running: true,
+			Labels:  appLabels("robot1", 1),
+		},
+		"simenv-robot02": {
+			Name:    "simenv-robot02",
+			Running: true,
+			Labels: map[string]string{
+				"simenv.managed":     "true",
+				"simenv.role":        "app",
+				"simenv.robot":       "robot2",
+				"simenv.robot.index": "2",
+			},
+		},
+		"simenv-robot2-debug": {
+			Name:    "simenv-robot2-debug",
+			Running: true,
+			Labels: map[string]string{
+				"simenv.managed": "true",
+				"simenv.role":    "app",
+			},
+		},
 	}}
 	factory := EasyGoVehicleFactory{Engine: engine}
 
@@ -330,15 +420,28 @@ func TestEasyGoVehicleFactoryDiscoversOnlyRobotContainers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ports) != 1 {
+	if len(ports) != 2 {
 		t.Fatalf("ports=%d", len(ports))
 	}
-	vehicle, ok := ports[0].(EasyGoVehicle)
-	if !ok {
-		t.Fatalf("port=%T", ports[0])
+	names := map[string]bool{}
+	for _, port := range ports {
+		vehicle, ok := port.(EasyGoVehicle)
+		if !ok {
+			t.Fatalf("port=%T", port)
+		}
+		names[vehicle.Robot.Name] = true
 	}
-	if vehicle.Robot.Name != "robot1" {
-		t.Fatalf("robot=%+v", vehicle.Robot)
+	if !names["robot1"] || !names["robot2"] {
+		t.Fatalf("robots=%v", names)
+	}
+}
+
+func appLabels(name string, index int) map[string]string {
+	return map[string]string{
+		contract.LabelManaged: "true",
+		contract.LabelRole:    contract.RoleApp,
+		vehicleRobotLabel:     name,
+		vehicleIndexLabel:     strconv.Itoa(index),
 	}
 }
 
