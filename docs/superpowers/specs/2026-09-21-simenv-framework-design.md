@@ -14,16 +14,17 @@ Orchestrator        只跑生命周期
 Session             一次运行
 Attachment          index · name          // 一条附着，不是一辆差速车
 WorldPort           环境角色
-VehiclePort         程序角色（一附着一份）
+VehiclePort         程序角色（一附着一份，端口绑定一台车）
+VehiclePortFactory  创建 / 发现 VehiclePort
 ```
 
 流程（不随引擎或车而变）：
 
 ```text
 start:  World.Start(session) → World.Ready
-        ∀ a: Vehicle.Start(session, a) → Vehicle.Ready
-status: World.Status + ∀ a Vehicle.Status
-stop:   ∀ a Vehicle.Stop → World.Stop
+        ∀ a: port(a).Start
+status: World.Status + ∀ a port(a).Status
+stop:   ∀ a port(a).Stop → World.Stop
 ```
 
 就绪含义由框架定：环境在推进，每个 Attachment 的身体已在。怎么判定，端口实现回答。编排核只问端口。
@@ -39,10 +40,14 @@ type WorldPort interface {
 }
 
 type VehiclePort interface {
-    Start(ctx context.Context, sess *Session, a Attachment) error
-    Ready(ctx context.Context) error
+    Start(ctx context.Context) error
     Status(ctx context.Context) (VehicleStatus, error)
     Stop(ctx context.Context) error
+}
+
+type VehiclePortFactory interface {
+    New(sess Session, robot Robot) VehiclePort
+    Discover(ctx context.Context) ([]VehiclePort, error)
 }
 ```
 

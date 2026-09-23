@@ -82,22 +82,20 @@ func (f *fakeWorldPort) Stop(context.Context) error {
 }
 
 type fakeVehiclePort struct {
-	sessions []contract.Session
-	robots   []contract.Robot
-	stopped  bool
+	session contract.Session
+	robot   contract.Robot
+	status  AppStatus
+	started bool
+	stopped bool
 }
 
-func (f *fakeVehiclePort) Start(_ context.Context, session contract.Session, robot contract.Robot) error {
-	f.sessions = append(f.sessions, session)
-	f.robots = append(f.robots, robot)
+func (f *fakeVehiclePort) Start(context.Context) error {
+	f.started = true
 	return nil
 }
 
-func (f *fakeVehiclePort) Status(context.Context) ([]AppStatus, error) {
-	return []AppStatus{
-		{Name: "simenv-robot1", Running: true, APIPort: 18189, Image: "runtime"},
-		{Name: "simenv-robot2", Running: true, APIPort: 18289, Image: "runtime"},
-	}, nil
+func (f *fakeVehiclePort) Status(context.Context) (AppStatus, error) {
+	return f.status, nil
 }
 
 func (f *fakeVehiclePort) Stop(context.Context) error {
@@ -105,10 +103,37 @@ func (f *fakeVehiclePort) Stop(context.Context) error {
 	return nil
 }
 
+type fakeVehicleFactory struct {
+	ports []*fakeVehiclePort
+}
+
+func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
+	port := &fakeVehiclePort{
+		session: session,
+		robot:   robot,
+		status: AppStatus{
+			Name:    contract.AppContainer(robot.Name),
+			Running: true,
+			APIPort: easyGoRuntimeFor(robot.Index).apiPort,
+			Image:   "runtime",
+		},
+	}
+	f.ports = append(f.ports, port)
+	return port
+}
+
+func (f *fakeVehicleFactory) Discover(context.Context) ([]VehiclePort, error) {
+	ports := make([]VehiclePort, 0, len(f.ports))
+	for _, port := range f.ports {
+		ports = append(ports, port)
+	}
+	return ports, nil
+}
+
 func TestStartDelegatesThroughWorldAndVehiclePorts(t *testing.T) {
 	worldPort := &fakeWorldPort{}
-	vehiclePort := &fakeVehiclePort{}
-	orch := Orchestrator{World: worldPort, Vehicle: vehiclePort}
+	vehicleFactory := &fakeVehicleFactory{}
+	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory}
 	status, err := orch.Start(context.Background(), contract.StartConfig{
 		Robots: 2, World: "simple", AppImage: "runtime", EnvImage: "env",
 	})
@@ -121,14 +146,17 @@ func TestStartDelegatesThroughWorldAndVehiclePorts(t *testing.T) {
 	if got := worldPort.started[0].Robots; len(got) != 2 || got[0].Name != "robot1" || got[1].Name != "robot2" {
 		t.Fatalf("session=%+v", worldPort.started[0])
 	}
-	if len(vehiclePort.sessions) != 2 {
-		t.Fatalf("vehicle sessions=%+v", vehiclePort.sessions)
+	if len(vehicleFactory.ports) != 2 {
+		t.Fatalf("vehicle ports=%d", len(vehicleFactory.ports))
 	}
-	if len(vehiclePort.robots) != 2 || vehiclePort.robots[0].Name != "robot1" || vehiclePort.robots[1].Name != "robot2" {
-		t.Fatalf("vehicle robots=%+v", vehiclePort.robots)
+	if !vehicleFactory.ports[0].started || !vehicleFactory.ports[1].started {
+		t.Fatalf("vehicle ports were not started: %+v", vehicleFactory.ports)
 	}
-	if vehiclePort.sessions[0].Robots[1].Name != "robot2" {
-		t.Fatalf("vehicle session=%+v", vehiclePort.sessions[0])
+	if vehicleFactory.ports[0].robot.Name != "robot1" || vehicleFactory.ports[1].robot.Name != "robot2" {
+		t.Fatalf("vehicle robots=%+v", vehicleFactory.ports)
+	}
+	if vehicleFactory.ports[0].session.Robots[1].Name != "robot2" {
+		t.Fatalf("vehicle session=%+v", vehicleFactory.ports[0].session)
 	}
 	if !status.Connected || len(status.Apps) != 2 {
 		t.Fatalf("status=%+v", status)
@@ -189,6 +217,28 @@ func TestStartWorldThenApp(t *testing.T) {
 	}
 }
 
+func TestStatusAggregatesIndependentVehiclePorts(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]ContainerInfo{
+		contract.WorldContainer: {Name: contract.WorldContainer, Running: true, Image: "env"},
+		"simenv-robot1":         {Name: "simenv-robot1", Running: true, Image: "runtime-1"},
+		"simenv-robot2":         {Name: "simenv-robot2", Running: false, Image: "runtime-2"},
+	}}
+	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}})
+	engine.ready = string(report)
+	orch := Orchestrator{Engine: engine}
+
+	status, err := orch.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Apps) != 2 {
+		t.Fatalf("apps=%+v", status.Apps)
+	}
+	if status.Apps[0].Name == status.Apps[1].Name {
+		t.Fatalf("apps=%+v", status.Apps)
+	}
+}
+
 func TestStartRejectsEmptyAppImage(t *testing.T) {
 	orch := Orchestrator{Engine: &fakeEngine{infos: map[string]ContainerInfo{}}}
 	_, err := orch.Start(context.Background(), contract.StartConfig{Robots: 1, World: "simple", EnvImage: "env"})
@@ -229,6 +279,57 @@ func TestStopStopsWorldAndApps(t *testing.T) {
 	}
 	if len(engine.stopped) != 2 {
 		t.Fatalf("stopped=%v", engine.stopped)
+	}
+}
+
+func TestEasyGoVehicleOnlyManagesItsRobot(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]ContainerInfo{
+		"simenv-robot1": {Name: "simenv-robot1", Running: true, Image: "runtime-1"},
+		"simenv-robot2": {Name: "simenv-robot2", Running: true, Image: "runtime-2"},
+	}}
+	vehicle := EasyGoVehicle{
+		Engine: engine,
+		Robot:  contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "robot1"},
+	}
+
+	status, err := vehicle.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Name != "simenv-robot1" || status.Image != "runtime-1" {
+		t.Fatalf("status=%+v", status)
+	}
+
+	if err := vehicle.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(engine.stopped) != 1 || engine.stopped[0] != "simenv-robot1" {
+		t.Fatalf("stopped=%v", engine.stopped)
+	}
+}
+
+func TestEasyGoVehicleFactoryDiscoversOnlyRobotContainers(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]ContainerInfo{
+		contract.WorldContainer: {Name: contract.WorldContainer, Running: true},
+		"simenv-robot1":         {Name: "simenv-robot1", Running: true},
+		"simenv-robot02":        {Name: "simenv-robot02", Running: true},
+		"simenv-robot2-debug":   {Name: "simenv-robot2-debug", Running: true},
+	}}
+	factory := EasyGoVehicleFactory{Engine: engine}
+
+	ports, err := factory.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 1 {
+		t.Fatalf("ports=%d", len(ports))
+	}
+	vehicle, ok := ports[0].(EasyGoVehicle)
+	if !ok {
+		t.Fatalf("port=%T", ports[0])
+	}
+	if vehicle.Robot.Name != "robot1" {
+		t.Fatalf("robot=%+v", vehicle.Robot)
 	}
 }
 

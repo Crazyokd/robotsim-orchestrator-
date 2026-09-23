@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
@@ -96,17 +97,22 @@ type WorldPort interface {
 }
 
 type VehiclePort interface {
-	Start(ctx context.Context, session contract.Session, robot contract.Robot) error
-	Status(ctx context.Context) ([]AppStatus, error)
+	Start(ctx context.Context) error
+	Status(ctx context.Context) (AppStatus, error)
 	Stop(ctx context.Context) error
 }
 
+type VehiclePortFactory interface {
+	New(session contract.Session, robot contract.Robot) VehiclePort
+	Discover(ctx context.Context) ([]VehiclePort, error)
+}
+
 type Orchestrator struct {
-	Engine  Engine
-	World   WorldPort
-	Vehicle VehiclePort
-	Now     func() time.Time
-	Sleep   func(context.Context, time.Duration) error
+	Engine         Engine
+	World          WorldPort
+	VehicleFactory VehiclePortFactory
+	Now            func() time.Time
+	Sleep          func(context.Context, time.Duration) error
 }
 
 func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Status, error) {
@@ -119,25 +125,34 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		return Status{}, err
 	}
 	worldPort := o.worldPort(cfg)
-	vehiclePort := o.vehiclePort(cfg)
+	vehicleFactory := o.vehicleFactory(cfg)
 	if err := worldPort.Start(ctx, session); err != nil {
 		return Status{}, err
 	}
 	if _, err := worldPort.Ready(ctx); err != nil {
 		return Status{}, err
 	}
+	vehiclePorts := make([]VehiclePort, 0, len(session.Robots))
 	for _, robot := range session.Robots {
-		if err := vehiclePort.Start(ctx, session, robot); err != nil {
+		vehiclePort := vehicleFactory.New(session, robot)
+		if err := vehiclePort.Start(ctx); err != nil {
 			return Status{}, err
 		}
+		vehiclePorts = append(vehiclePorts, vehiclePort)
 	}
-	return statusFromPorts(ctx, worldPort, vehiclePort)
+	return statusFromPorts(ctx, worldPort, vehiclePorts)
 }
 
 func (o Orchestrator) Stop(ctx context.Context) error {
+	vehiclePorts, err := o.vehicleFactory(contract.StartConfig{}).Discover(ctx)
+	if err != nil {
+		return err
+	}
 	var first error
-	if err := o.vehiclePort(contract.StartConfig{}).Stop(ctx); err != nil {
-		first = err
+	for _, vehiclePort := range vehiclePorts {
+		if err := vehiclePort.Stop(ctx); err != nil && first == nil {
+			first = err
+		}
 	}
 	if err := o.worldPort(contract.StartConfig{}).Stop(ctx); err != nil && first == nil {
 		first = err
@@ -146,17 +161,25 @@ func (o Orchestrator) Stop(ctx context.Context) error {
 }
 
 func (o Orchestrator) Status(ctx context.Context) (Status, error) {
-	return statusFromPorts(ctx, o.worldPort(contract.StartConfig{}), o.vehiclePort(contract.StartConfig{}))
+	vehiclePorts, err := o.vehicleFactory(contract.StartConfig{}).Discover(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	return statusFromPorts(ctx, o.worldPort(contract.StartConfig{}), vehiclePorts)
 }
 
-func statusFromPorts(ctx context.Context, worldPort WorldPort, vehiclePort VehiclePort) (Status, error) {
+func statusFromPorts(ctx context.Context, worldPort WorldPort, vehiclePorts []VehiclePort) (Status, error) {
 	worldInfo, ready, err := worldPort.Status(ctx)
 	if err != nil {
 		return Status{}, err
 	}
-	apps, err := vehiclePort.Status(ctx)
-	if err != nil {
-		return Status{}, err
+	apps := make([]AppStatus, 0, len(vehiclePorts))
+	for _, vehiclePort := range vehiclePorts {
+		app, err := vehiclePort.Status(ctx)
+		if err != nil {
+			return Status{}, err
+		}
+		apps = append(apps, app)
 	}
 	appImage := ""
 	if len(apps) > 0 {
@@ -179,11 +202,11 @@ func (o Orchestrator) worldPort(cfg contract.StartConfig) WorldPort {
 	return DockerWorld{Engine: o.Engine, Config: cfg, Sleep: o.Sleep}
 }
 
-func (o Orchestrator) vehiclePort(cfg contract.StartConfig) VehiclePort {
-	if o.Vehicle != nil {
-		return o.Vehicle
+func (o Orchestrator) vehicleFactory(cfg contract.StartConfig) VehiclePortFactory {
+	if o.VehicleFactory != nil {
+		return o.VehicleFactory
 	}
-	return EasyGoVehicle{Engine: o.Engine, Config: cfg}
+	return EasyGoVehicleFactory{Engine: o.Engine, Config: cfg}
 }
 
 type DockerWorld struct {
@@ -234,13 +257,62 @@ func (w DockerWorld) Stop(ctx context.Context) error {
 	return w.Engine.Stop(ctx, contract.WorldContainer)
 }
 
-type EasyGoVehicle struct {
+type EasyGoVehicleFactory struct {
 	Engine Engine
 	Config contract.StartConfig
 }
 
-func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session, robot contract.Robot) error {
-	if err := session.Validate(); err != nil {
+func (f EasyGoVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
+	return EasyGoVehicle{
+		Engine:  f.Engine,
+		Config:  f.Config,
+		Session: session,
+		Robot:   robot,
+	}
+}
+
+func (f EasyGoVehicleFactory) Discover(ctx context.Context) ([]VehiclePort, error) {
+	infos, err := f.Engine.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ports := make([]VehiclePort, 0, len(infos))
+	for _, info := range infos {
+		robot, ok := robotFromContainerName(info.Name)
+		if !ok {
+			continue
+		}
+		ports = append(ports, f.New(contract.Session{}, robot))
+	}
+	return ports, nil
+}
+
+func robotFromContainerName(name string) (contract.Robot, bool) {
+	const prefix = "simenv-robot"
+	indexText := strings.TrimPrefix(name, prefix)
+	if indexText == name {
+		return contract.Robot{}, false
+	}
+	index, err := strconv.Atoi(indexText)
+	if err != nil || index < 1 {
+		return contract.Robot{}, false
+	}
+	robot, err := contract.NewRobot(index, contract.Pose{})
+	if err != nil || contract.AppContainer(robot.Name) != name {
+		return contract.Robot{}, false
+	}
+	return robot, true
+}
+
+type EasyGoVehicle struct {
+	Engine  Engine
+	Config  contract.StartConfig
+	Session contract.Session
+	Robot   contract.Robot
+}
+
+func (v EasyGoVehicle) Start(ctx context.Context) error {
+	if err := v.Session.Validate(); err != nil {
 		return err
 	}
 	cfg := withDefaults(v.Config)
@@ -252,17 +324,17 @@ func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session, robo
 		}
 		dataRoot = filepath.Join(cache, "simenv")
 	}
-	hostSros := filepath.Join(dataRoot, robot.Name)
+	hostSros := filepath.Join(dataRoot, v.Robot.Name)
 	if err := os.MkdirAll(hostSros, 0o755); err != nil {
 		return err
 	}
-	runtime := easyGoRuntimeFor(robot.Index)
-	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(robot, runtime, cfg.GUI)...)
+	runtime := easyGoRuntimeFor(v.Robot.Index)
+	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, cfg.GUI)...)
 	if err := v.Engine.Start(ctx, ContainerSpec{
-		Name:    contract.AppContainer(robot.Name),
+		Name:    contract.AppContainer(v.Robot.Name),
 		Image:   cfg.AppImage,
 		Command: cmd,
-		Env:     appEnv(robot, session, runtime),
+		Env:     appEnv(v.Robot, v.Session, runtime),
 		Binds:   []string{hostSros + ":/sros"},
 		Network: "host",
 		Ipc:     "host",
@@ -273,42 +345,21 @@ func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session, robo
 	return nil
 }
 
-func (v EasyGoVehicle) Status(ctx context.Context) ([]AppStatus, error) {
-	infos, err := v.Engine.List(ctx)
+func (v EasyGoVehicle) Status(ctx context.Context) (AppStatus, error) {
+	info, err := v.Engine.Inspect(ctx, contract.AppContainer(v.Robot.Name))
 	if err != nil {
-		return nil, err
+		return AppStatus{}, err
 	}
-	var apps []AppStatus
-	for _, info := range infos {
-		if info.Name == contract.WorldContainer {
-			continue
-		}
-		index := 0
-		fmt.Sscanf(info.Name, "simenv-robot%d", &index)
-		api := 0
-		if index > 0 {
-			api = easyGoRuntimeFor(index).apiPort
-		}
-		apps = append(apps, AppStatus{Name: info.Name, Running: info.Running, APIPort: api, Image: info.Image})
-	}
-	return apps, nil
+	return AppStatus{
+		Name:    info.Name,
+		Running: info.Running,
+		APIPort: easyGoRuntimeFor(v.Robot.Index).apiPort,
+		Image:   info.Image,
+	}, nil
 }
 
 func (v EasyGoVehicle) Stop(ctx context.Context) error {
-	infos, err := v.Engine.List(ctx)
-	if err != nil {
-		return err
-	}
-	var first error
-	for _, info := range infos {
-		if info.Name == contract.WorldContainer {
-			continue
-		}
-		if err := v.Engine.Stop(ctx, info.Name); err != nil && first == nil {
-			first = err
-		}
-	}
-	return first
+	return v.Engine.Stop(ctx, contract.AppContainer(v.Robot.Name))
 }
 
 func withDefaults(cfg contract.StartConfig) contract.StartConfig {
