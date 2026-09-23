@@ -332,7 +332,9 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 		return err
 	}
 	runtime := easyGoRuntimeFor(v.Robot.Index)
-	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, cfg.GUI)...)
+	useRviz := cfg.WantsRviz(v.Robot.Index)
+	useGzGui := cfg.WantsGzGui(v.Robot.Index)
+	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, useRviz, useGzGui)...)
 	if err := v.Engine.Start(ctx, ContainerSpec{
 		Name:    contract.AppContainer(v.Robot.Name),
 		Image:   cfg.AppImage,
@@ -341,7 +343,7 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 		Binds:   []string{hostSros + ":/sros"},
 		Network: "host",
 		Ipc:     "host",
-		Devices: guiDevices(cfg.GUI),
+		Devices: guiDevices(useRviz || useGzGui),
 		Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleApp},
 	}); err != nil {
 		return err
@@ -441,11 +443,11 @@ func easyGoRuntimeFor(index int) easyGoRuntime {
 	}
 }
 
-func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime, gui bool) []string {
+func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime, useRviz, useGzGui bool) []string {
 	return []string{
 		"start_gazebo:=false",
-		fmt.Sprintf("use_gz_gui:=%t", gui),
-		fmt.Sprintf("use_rviz:=%t", gui),
+		fmt.Sprintf("use_gz_gui:=%t", useGzGui),
+		fmt.Sprintf("use_rviz:=%t", useRviz),
 		"enable_person_follow:=false",
 		"enable_multi_robot_wifi:=true",
 		"robot_name:=" + robot.TopicPrefix,

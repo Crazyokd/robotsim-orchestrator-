@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
@@ -57,7 +58,8 @@ func parseStart(args []string) (contract.StartConfig, error) {
 	partition := fs.String("partition", contract.DefaultPartition, "")
 	dataRoot := fs.String("data-root", "", "")
 	posesText := fs.String("poses", "", "")
-	gui := fs.Bool("gui", false, "")
+	rvizText := fs.String("rviz", "", "")
+	gzGuiText := fs.String("gz-gui", "", "")
 	if err := fs.Parse(args); err != nil {
 		return contract.StartConfig{}, err
 	}
@@ -68,16 +70,45 @@ func parseStart(args []string) (contract.StartConfig, error) {
 	if err != nil {
 		return contract.StartConfig{}, err
 	}
+	rvizRobots, err := parseRobotIndices("rviz", *rvizText)
+	if err != nil {
+		return contract.StartConfig{}, err
+	}
+	gzGuiRobots, err := parseRobotIndices("gz-gui", *gzGuiText)
+	if err != nil {
+		return contract.StartConfig{}, err
+	}
 	return contract.StartConfig{
-		Robots:    *robots,
-		World:     *worldName,
-		AppImage:  *appImage,
-		EnvImage:  *envImage,
-		Partition: *partition,
-		DataRoot:  *dataRoot,
-		Poses:     poses,
-		GUI:       *gui,
+		Robots:      *robots,
+		World:       *worldName,
+		AppImage:    *appImage,
+		EnvImage:    *envImage,
+		Partition:   *partition,
+		DataRoot:    *dataRoot,
+		Poses:       poses,
+		RvizRobots:  rvizRobots,
+		GzGuiRobots: gzGuiRobots,
 	}, nil
+}
+
+func parseRobotIndices(flag, text string) ([]int, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, nil
+	}
+	var indices []int
+	for _, part := range strings.Split(text, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		index, err := strconv.Atoi(part)
+		if err != nil || index < 1 {
+			return nil, fmt.Errorf("%s robot %q is not a positive index", flag, part)
+		}
+		indices = append(indices, index)
+	}
+	return indices, nil
 }
 
 func parsePoses(text string) ([]contract.Pose, error) {

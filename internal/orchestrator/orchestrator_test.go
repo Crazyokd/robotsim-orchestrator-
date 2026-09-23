@@ -248,7 +248,7 @@ func TestStartRejectsEmptyAppImage(t *testing.T) {
 }
 
 func TestEasyGoLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
-	args := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}, easyGoRuntimeFor(1), false)
+	args := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}, easyGoRuntimeFor(1), false, false)
 	if !containsAny(args, "robot_name:=fleet/robot1") {
 		t.Fatalf("args=%v", args)
 	}
@@ -257,14 +257,23 @@ func TestEasyGoLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
 	}
 }
 
-func TestEasyGoLaunchGuiFlagTogglesViewers(t *testing.T) {
-	headless := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "robot1"}, easyGoRuntimeFor(1), false)
+func TestEasyGoLaunchTogglesViewersIndependently(t *testing.T) {
+	robot := contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "robot1"}
+	headless := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), false, false)
 	if !containsAny(headless, "use_gz_gui:=false") || !containsAny(headless, "use_rviz:=false") {
 		t.Fatalf("headless args=%v", headless)
 	}
-	gui := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "robot1"}, easyGoRuntimeFor(1), true)
-	if !containsAny(gui, "use_gz_gui:=true") || !containsAny(gui, "use_rviz:=true") {
-		t.Fatalf("gui args=%v", gui)
+	rvizOnly := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), true, false)
+	if !containsAny(rvizOnly, "use_rviz:=true") || !containsAny(rvizOnly, "use_gz_gui:=false") {
+		t.Fatalf("rviz-only args=%v", rvizOnly)
+	}
+	gzGuiOnly := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), false, true)
+	if !containsAny(gzGuiOnly, "use_gz_gui:=true") || !containsAny(gzGuiOnly, "use_rviz:=false") {
+		t.Fatalf("gz-gui-only args=%v", gzGuiOnly)
+	}
+	both := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), true, true)
+	if !containsAny(both, "use_gz_gui:=true") || !containsAny(both, "use_rviz:=true") {
+		t.Fatalf("both args=%v", both)
 	}
 }
 
@@ -341,6 +350,51 @@ func containsAny(items []string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func TestViewersArePerRobot(t *testing.T) {
+	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2", "robot3"}})
+	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
+	orch := Orchestrator{Engine: engine}
+	cfg := contract.StartConfig{
+		Robots: 3, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
+		Partition: contract.DefaultPartition, DataRoot: t.TempDir(),
+		RvizRobots:  []int{1},
+		GzGuiRobots: []int{2},
+	}
+	if _, err := orch.Start(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	// started[0] is the world; the rest follow session order.
+	if len(engine.started) != 4 {
+		t.Fatalf("started=%d", len(engine.started))
+	}
+	cases := []struct {
+		name        string
+		rviz, gzGui bool
+	}{
+		{"simenv-robot1", true, false},
+		{"simenv-robot2", false, true},
+		{"simenv-robot3", false, false},
+	}
+	for i, want := range cases {
+		spec := engine.started[i+1]
+		if spec.Name != want.name {
+			t.Fatalf("spec[%d] name=%s", i+1, spec.Name)
+		}
+		joined := strings.Join(spec.Command, " ")
+		if got := strings.Contains(joined, "use_rviz:=true"); got != want.rviz {
+			t.Fatalf("%s use_rviz: want %t in %v", want.name, want.rviz, spec.Command)
+		}
+		if got := strings.Contains(joined, "use_gz_gui:=true"); got != want.gzGui {
+			t.Fatalf("%s use_gz_gui: want %t in %v", want.name, want.gzGui, spec.Command)
+		}
+		// Only the robots with a viewer need the host GPU.
+		wantGPU := want.rviz || want.gzGui
+		if got := len(spec.Devices) > 0; got != wantGPU {
+			t.Fatalf("%s devices=%v", want.name, spec.Devices)
+		}
+	}
 }
 
 func sessionFromCommand(t *testing.T, command []string) contract.Session {

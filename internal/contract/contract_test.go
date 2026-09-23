@@ -132,3 +132,33 @@ func TestSessionJSONDoesNotExposeEasyGoRuntime(t *testing.T) {
 		}
 	}
 }
+
+func TestStartConfigRejectsViewerRobotOutsideRange(t *testing.T) {
+	base := StartConfig{Robots: 2, World: "simple", AppImage: "img", EnvImage: "env"}
+	cfg := base
+	cfg.RvizRobots = []int{3}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("rviz robot 3 must fail with 2 robots")
+	}
+	cfg = base
+	cfg.GzGuiRobots = []int{0}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("gz-gui robot 0 must fail")
+	}
+	cfg = base
+	cfg.RvizRobots = []int{1}
+	cfg.GzGuiRobots = []int{2}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartConfigViewerQueries(t *testing.T) {
+	cfg := StartConfig{RvizRobots: []int{1, 3}, GzGuiRobots: []int{2}}
+	if !cfg.WantsRviz(1) || !cfg.WantsRviz(3) || cfg.WantsRviz(2) {
+		t.Fatal("WantsRviz mismatch")
+	}
+	if !cfg.WantsGzGui(2) || cfg.WantsGzGui(1) {
+		t.Fatal("WantsGzGui mismatch")
+	}
+}

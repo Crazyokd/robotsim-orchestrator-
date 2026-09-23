@@ -39,14 +39,34 @@ type Robot struct {
 }
 
 type StartConfig struct {
-	Robots    int
-	World     string
-	AppImage  string
-	EnvImage  string
-	Partition string
-	DataRoot  string
-	Poses     []Pose
-	GUI       bool
+	Robots      int
+	World       string
+	AppImage    string
+	EnvImage    string
+	Partition   string
+	DataRoot    string
+	Poses       []Pose
+	RvizRobots  []int
+	GzGuiRobots []int
+}
+
+// WantsRviz reports whether the given robot index was asked to run RViz.
+func (c StartConfig) WantsRviz(index int) bool {
+	return containsIndex(c.RvizRobots, index)
+}
+
+// WantsGzGui reports whether the given robot index was asked to run the Gazebo GUI.
+func (c StartConfig) WantsGzGui(index int) bool {
+	return containsIndex(c.GzGuiRobots, index)
+}
+
+func containsIndex(indices []int, index int) bool {
+	for _, i := range indices {
+		if i == index {
+			return true
+		}
+	}
+	return false
 }
 
 func RobotName(index int) string {
@@ -84,6 +104,21 @@ func (c StartConfig) Validate() error {
 	}
 	if len(c.Poses) > 0 && len(c.Poses) != c.Robots {
 		return fmt.Errorf("poses count %d does not match robots %d", len(c.Poses), c.Robots)
+	}
+	if err := validateViewerRobots("rviz", c.RvizRobots, c.Robots); err != nil {
+		return err
+	}
+	if err := validateViewerRobots("gz-gui", c.GzGuiRobots, c.Robots); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateViewerRobots(flag string, indices []int, robots int) error {
+	for _, index := range indices {
+		if index < 1 || index > robots {
+			return fmt.Errorf("%s robot %d outside robot count %d", flag, index, robots)
+		}
 	}
 	return nil
 }

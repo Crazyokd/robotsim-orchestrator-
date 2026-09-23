@@ -59,3 +59,43 @@ func TestUnknownCommandFails(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestStartParsesViewerRobotsPerFlag(t *testing.T) {
+	orch := &fakeOrch{}
+	err := Run([]string{
+		"start", "--robots", "3", "--world", "simple", "--app-image", "runtime-sim:v1",
+		"--rviz", "1,3", "--gz-gui", "2",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, orch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orch.started.RvizRobots) != 2 || orch.started.RvizRobots[0] != 1 || orch.started.RvizRobots[1] != 3 {
+		t.Fatalf("rviz robots=%v", orch.started.RvizRobots)
+	}
+	if len(orch.started.GzGuiRobots) != 1 || orch.started.GzGuiRobots[0] != 2 {
+		t.Fatalf("gz-gui robots=%v", orch.started.GzGuiRobots)
+	}
+}
+
+func TestStartDefaultsToNoViewers(t *testing.T) {
+	orch := &fakeOrch{}
+	err := Run([]string{"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1"}, &bytes.Buffer{}, &bytes.Buffer{}, orch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orch.started.RvizRobots) != 0 || len(orch.started.GzGuiRobots) != 0 {
+		t.Fatalf("viewers=%v/%v", orch.started.RvizRobots, orch.started.GzGuiRobots)
+	}
+}
+
+func TestStartRejectsBadViewerRobot(t *testing.T) {
+	for _, arg := range []string{"0", "-1", "robot1", "1,x"} {
+		err := Run([]string{
+			"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1",
+			"--rviz", arg,
+		}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
+		if err == nil {
+			t.Fatalf("--rviz %q must fail", arg)
+		}
+	}
+}
