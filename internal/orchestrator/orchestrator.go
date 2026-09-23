@@ -30,6 +30,7 @@ const (
 	easyGoRVizRFBBase      = 5902
 	easyGoROSDomainBase    = 11
 	easyGoRuntimeRoot      = "/sros"
+	hostGPUDevice          = "/dev/dri"
 )
 
 type ContainerSpec struct {
@@ -40,6 +41,7 @@ type ContainerSpec struct {
 	Binds   []string
 	Network string
 	Ipc     string
+	Devices []string
 	Labels  map[string]string
 }
 
@@ -236,6 +238,7 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session) error 
 		},
 		Network: "host",
 		Ipc:     "host",
+		Devices: hostDevices(),
 		Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleWorld},
 	})
 }
@@ -338,6 +341,7 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 		Binds:   []string{hostSros + ":/sros"},
 		Network: "host",
 		Ipc:     "host",
+		Devices: guiDevices(cfg.GUI),
 		Labels:  map[string]string{contract.LabelManaged: "true", contract.LabelRole: contract.RoleApp},
 	}); err != nil {
 		return err
@@ -491,6 +495,23 @@ func appEnv(robot contract.Robot, session contract.Session, runtime easyGoRuntim
 		"EASYGO_SIM_APP_ROOT":           runtime.runtimeRoot + "/easygo-app",
 		"EASYGO_WEBAPP_DIR":             runtime.runtimeRoot + "/webapp",
 	}
+}
+
+// hostDevices returns the GPU device nodes to map into a container when the
+// host exposes them. Without them ogre2 ray casting falls back to llvmpipe,
+// which cannot hold real time beyond one robot.
+func hostDevices() []string {
+	if _, err := os.Stat(hostGPUDevice); err != nil {
+		return nil
+	}
+	return []string{hostGPUDevice}
+}
+
+func guiDevices(gui bool) []string {
+	if !gui {
+		return nil
+	}
+	return hostDevices()
 }
 
 func cycloneDDSURI() string {

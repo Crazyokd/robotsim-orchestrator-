@@ -55,6 +55,7 @@ func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 			"NetworkMode": spec.Network,
 			"IpcMode":     spec.Ipc,
 			"Binds":       spec.Binds,
+			"Devices":     deviceMappings(spec.Devices),
 			"AutoRemove":  false,
 		},
 	}
@@ -68,6 +69,22 @@ func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 		return fmt.Errorf("start %s: %w", spec.Name, err)
 	}
 	return nil
+}
+
+func deviceMappings(devices []string) []map[string]string {
+	out := make([]map[string]string, 0, len(devices))
+	for _, dev := range devices {
+		host, container, _ := strings.Cut(dev, ":")
+		if container == "" {
+			container = host
+		}
+		out = append(out, map[string]string{
+			"PathOnHost":        host,
+			"PathInContainer":   container,
+			"CgroupPermissions": "rwm",
+		})
+	}
+	return out
 }
 
 func (d DockerEngine) Stop(ctx context.Context, name string) error {
