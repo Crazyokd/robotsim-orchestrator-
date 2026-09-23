@@ -33,6 +33,11 @@ const (
 	hostGPUDevice          = "/dev/dri"
 	vehicleRobotLabel      = "simenv.robot"
 	vehicleIndexLabel      = "simenv.robot.index"
+	// appGZResourcePath lets the vehicle-side Gazebo GUI resolve model://
+	// URIs. The robot description lives in the app image under /opt/sros/share,
+	// world models (pallets, cages) in the bringup package. Empty here means
+	// every robot link mesh fails to load and the vehicle renders as nothing.
+	appGZResourcePath = "/opt/sros/share:/opt/sros/share/easygo_sim_bringup/models"
 )
 
 type ContainerSpec struct {
@@ -359,12 +364,18 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 	useRviz := cfg.WantsRviz(v.Robot.Index)
 	useGzGui := cfg.WantsGzGui(v.Robot.Index)
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, useRviz, useGzGui)...)
+	binds := []string{hostSros + ":/sros"}
+	if useGzGui {
+		if bind := gzGuiAssetBind(); bind != "" {
+			binds = append(binds, bind)
+		}
+	}
 	if err := v.Engine.Start(ctx, ContainerSpec{
 		Name:    contract.AppContainer(v.Robot.Name),
 		Image:   cfg.AppImage,
 		Command: cmd,
 		Env:     appEnv(v.Robot, v.Session, runtime),
-		Binds:   []string{hostSros + ":/sros"},
+		Binds:   binds,
 		Network: "host",
 		Ipc:     "host",
 		Devices: guiDevices(useRviz || useGzGui),
@@ -525,6 +536,7 @@ func appEnv(robot contract.Robot, session contract.Session, runtime easyGoRuntim
 		"EASYGO_SIM_WORLD":              session.World + ".sdf",
 		"EASYGO_SIM_APP_ROOT":           runtime.runtimeRoot + "/easygo-app",
 		"EASYGO_WEBAPP_DIR":             runtime.runtimeRoot + "/webapp",
+		"GZ_SIM_RESOURCE_PATH":          appGZResourcePath,
 	}
 }
 
@@ -543,6 +555,24 @@ func guiDevices(gui bool) []string {
 		return nil
 	}
 	return hostDevices()
+}
+
+// gzGuiAssetBind mounts this checkout's deploy/assets at /opt/simenv so the
+// vehicle-side Gazebo GUI can read the world props. The world SDF includes
+// model://black_pallet and model://cage1, which the world server resolves to
+// /opt/simenv/models/... at load time -- absolute paths it then sends in the
+// scene message. Those exist only inside the environment container, so a GUI
+// without this mount renders the world without its props.
+func gzGuiAssetBind() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	assets := filepath.Join(filepath.Dir(exe), "deploy", "assets")
+	if _, err := os.Stat(filepath.Join(assets, "models")); err != nil {
+		return ""
+	}
+	return assets + ":/opt/simenv"
 }
 
 func cycloneDDSURI() string {
