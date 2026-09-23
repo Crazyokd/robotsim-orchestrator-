@@ -1,12 +1,12 @@
 stages:
-  - check
+  - lint
   - image
 
 default:
   interruptible: true
 
-check:
-  stage: check
+lint:
+  stage: lint
   image: nexus3.sr/go:latest-bookworm-dev-env-linux-amd64
   tags:
     - docker-cicd
@@ -30,8 +30,6 @@ world-image:
   tags:
     - docker-cicd
     - docker-builder
-  needs:
-    - check
   rules:
     - changes:
         - deploy/Dockerfile
