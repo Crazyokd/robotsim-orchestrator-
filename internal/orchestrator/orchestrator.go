@@ -436,7 +436,7 @@ func appEnv(robot contract.Robot, session contract.Session, runtime easyGoRuntim
 		"BACKEND_PORT":                  strconv.Itoa(runtime.voicePort),
 		"PARAM_DB_PATH":                 runtime.runtimeRoot + "/db/cfg.db3",
 		"DATABASE_URL":                  "sqlite://" + runtime.runtimeRoot + "/db/easygo.db?mode=rwc",
-		"EASYGO_SIM_WORLD":              session.World,
+		"EASYGO_SIM_WORLD":              session.World + ".sdf",
 		"EASYGO_SIM_APP_ROOT":           runtime.runtimeRoot + "/easygo-app",
 		"EASYGO_WEBAPP_DIR":             runtime.runtimeRoot + "/webapp",
 	}
