@@ -492,10 +492,15 @@ func TestViewersArePerRobot(t *testing.T) {
 		if got := strings.Contains(joined, "use_gz_gui:=true"); got != want.gzGui {
 			t.Fatalf("%s use_gz_gui: want %t in %v", want.name, want.gzGui, spec.Command)
 		}
-		// Only the robots with a viewer need the host GPU.
-		wantGPU := want.rviz || want.gzGui
-		if got := len(spec.Devices) > 0; got != wantGPU {
-			t.Fatalf("%s devices=%v", want.name, spec.Devices)
+		// Only the robots with a viewer ask for the host GPU. Compare against
+		// hostDevices() so the expectation follows the host: a machine without
+		// /dev/dri gets none for anyone.
+		wantDevices := 0
+		if want.rviz || want.gzGui {
+			wantDevices = len(hostDevices())
+		}
+		if len(spec.Devices) != wantDevices {
+			t.Fatalf("%s devices=%v (want %d)", want.name, spec.Devices, wantDevices)
 		}
 	}
 }
