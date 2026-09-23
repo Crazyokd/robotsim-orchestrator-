@@ -18,3 +18,5 @@ docker build -f deploy/Dockerfile -t simenv-world:local .
 ```
 
 N=1 的 API 在 `http://127.0.0.1:18189/api/v6`。`--gui` 额外开观察视图：web-gz 3D 在 `http://127.0.0.1:6180/vnc.html`，RViz web 在 `http://127.0.0.1:6181/vnc.html`。环境镜像不含 easygo-app。worlds / 机器人模型来自 EasyGo `05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1`，记录在 `deploy/assets/EASYGO_WORLD_SOURCE_SHA`。
+
+宿主有 `/dev/dri` 时，世界容器会挂载它做硬件射线检测；没有则退回 llvmpipe 软件渲染，N≥2 跑不到实时。

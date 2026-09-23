@@ -37,6 +37,7 @@ N=1 的 API 是 `http://127.0.0.1:18189/api/v6`，不是 `:18089`。
 - 环境容器进程没有 easygo-app / slam_mapping / nav2
 - 程序在跑时 `GET http://127.0.0.1:18189/api/v6/vehicle/status` 可达
 - 带 `--gui` 时 `:6180`、`:6181` 的 noVNC 页面返回 200
+- N≥2 实时性：`gz topic -e -t /clock` 采样，仿真时间增量应等于墙钟增量（实时率 1.0）。宿主无 `/dev/dri` 时退软件渲染，N=2 只有 ~0.48
 - 本机没 Gazebo / `runtime-sim` 时写明未验证。没跑过多车不是环境缺陷
 
 **4. 停止。** `./simenv stop`。两边停干净，`18189` 释放。
