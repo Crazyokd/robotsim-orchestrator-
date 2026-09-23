@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
@@ -23,6 +25,7 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("simenv-world", flag.ContinueOnError)
 	sessionText := fs.String("session", "", "")
+	camerasText := fs.String("cameras", "", "")
 	assets := fs.String("assets", "/opt/simenv", "")
 	model := fs.String("model", "/opt/simenv/models/easygo_bj_bkn_description/models/easygo_bj_bkn_model.sdf", "")
 	if err := fs.Parse(args); err != nil {
@@ -38,13 +41,17 @@ func run(args []string) error {
 	if err := session.Validate(); err != nil {
 		return err
 	}
+	cameraRobots, err := parseCameraRobots(*camerasText, session)
+	if err != nil {
+		return err
+	}
 	bodies := make([]world.Body, 0, len(session.Robots))
 	for _, robot := range session.Robots {
 		bodies = append(bodies, world.Body{
 			Name:        robot.Name,
 			TopicPrefix: robot.TopicPrefix,
 			Pose:        robot.Pose,
-			KeepCameras: robot.Cameras,
+			KeepCameras: cameraRobots[robot.Index],
 		})
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -58,4 +65,27 @@ func run(args []string) error {
 		Bodies:     bodies,
 	}
 	return proc.Run(ctx)
+}
+
+func parseCameraRobots(text string, session contract.Session) (map[int]bool, error) {
+	known := make(map[int]bool, len(session.Robots))
+	for _, robot := range session.Robots {
+		known[robot.Index] = true
+	}
+	selected := map[int]bool{}
+	for _, part := range strings.Split(strings.TrimSpace(text), ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		index, err := strconv.Atoi(part)
+		if err != nil || index < 1 {
+			return nil, fmt.Errorf("cameras robot %q is not a positive index", part)
+		}
+		if !known[index] {
+			return nil, fmt.Errorf("cameras robot %d not in session", index)
+		}
+		selected[index] = true
+	}
+	return selected, nil
 }

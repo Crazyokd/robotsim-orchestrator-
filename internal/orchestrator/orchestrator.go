@@ -256,6 +256,13 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session) error 
 		return err
 	}
 	worldCmd := []string{"--session", string(rawSession)}
+	if len(cfg.CameraRobots) > 0 {
+		cameraRobots := make([]string, 0, len(cfg.CameraRobots))
+		for _, index := range cfg.CameraRobots {
+			cameraRobots = append(cameraRobots, strconv.Itoa(index))
+		}
+		worldCmd = append(worldCmd, "--cameras", strings.Join(cameraRobots, ","))
+	}
 	return w.Engine.Start(ctx, ContainerSpec{
 		Name:    contract.WorldContainer,
 		Image:   cfg.EnvImage,
@@ -363,7 +370,8 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 	runtime := easyGoRuntimeFor(v.Robot.Index)
 	useRviz := cfg.WantsRviz(v.Robot.Index)
 	useGzGui := cfg.WantsGzGui(v.Robot.Index)
-	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, useRviz, useGzGui)...)
+	useCameras := cfg.WantsCameras(v.Robot.Index)
+	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, useRviz, useGzGui, useCameras)...)
 	binds := []string{hostSros + ":/sros"}
 	if useGzGui {
 		if bind := gzGuiAssetBind(); bind != "" {
@@ -483,13 +491,13 @@ func easyGoRuntimeFor(index int) easyGoRuntime {
 	}
 }
 
-func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime, useRviz, useGzGui bool) []string {
+func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime, useRviz, useGzGui, useCameras bool) []string {
 	return []string{
 		"start_gazebo:=false",
 		fmt.Sprintf("use_gz_gui:=%t", useGzGui),
 		fmt.Sprintf("use_rviz:=%t", useRviz),
 		"enable_person_follow:=false",
-		fmt.Sprintf("bridge_rgbd:=%t", robot.Cameras),
+		fmt.Sprintf("bridge_rgbd:=%t", useCameras),
 		"enable_multi_robot_wifi:=true",
 		"robot_name:=" + robot.TopicPrefix,
 		"runtime_root:=" + runtime.runtimeRoot,

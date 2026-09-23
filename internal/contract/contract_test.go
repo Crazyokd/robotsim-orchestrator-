@@ -107,7 +107,7 @@ func TestStartConfigBuildsNeutralSession(t *testing.T) {
 	}
 }
 
-func TestSessionCarriesCamerasPerRobot(t *testing.T) {
+func TestCameraSelectionStaysOutsideSession(t *testing.T) {
 	session, err := StartConfig{
 		Robots:       3,
 		World:        "simple",
@@ -119,11 +119,12 @@ func TestSessionCarriesCamerasPerRobot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []bool{false, true, false}
-	for i, robot := range session.Robots {
-		if robot.Cameras != want[i] {
-			t.Fatalf("robot%d cameras=%t want %t", robot.Index, robot.Cameras, want[i])
-		}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "Cameras") {
+		t.Fatalf("session must not carry camera selection: %s", raw)
 	}
 	cfg := StartConfig{Robots: 2, World: "w", AppImage: "a", EnvImage: "e", CameraRobots: []int{3}}
 	if err := cfg.Validate(); err == nil {

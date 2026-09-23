@@ -36,10 +36,6 @@ type Robot struct {
 	Name        string
 	TopicPrefix string
 	Pose        Pose
-	// Cameras keeps the model's camera and depth_camera sensors. They are
-	// stripped by default because they are render-backed sensors the
-	// navigation stack does not need.
-	Cameras bool
 }
 
 type StartConfig struct {
@@ -144,9 +140,6 @@ func (c StartConfig) Session() (Session, error) {
 	robots, err := c.RobotsSpec()
 	if err != nil {
 		return Session{}, err
-	}
-	for i := range robots {
-		robots[i].Cameras = containsIndex(c.CameraRobots, robots[i].Index)
 	}
 	session := Session{World: c.World, Partition: c.Partition, Robots: robots}
 	if err := session.Validate(); err != nil {

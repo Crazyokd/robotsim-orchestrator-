@@ -185,7 +185,8 @@ func TestStartWorldThenApp(t *testing.T) {
 	cfg := contract.StartConfig{
 		Robots: 1, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
 		Partition: contract.DefaultPartition, DataRoot: t.TempDir(),
-		Poses: []contract.Pose{{X: 7, Y: 8, Z: contract.DefaultSpawnZ, Yaw: 1.5}},
+		Poses:        []contract.Pose{{X: 7, Y: 8, Z: contract.DefaultSpawnZ, Yaw: 1.5}},
+		CameraRobots: []int{1},
 	}
 	status, err := orch.Start(context.Background(), cfg)
 	if err != nil {
@@ -214,6 +215,9 @@ func TestStartWorldThenApp(t *testing.T) {
 	if len(worldSession.Robots) != 1 || worldSession.Robots[0].Pose.X != 7 || worldSession.Robots[0].Name != "robot1" {
 		t.Fatalf("world robots=%+v", worldSession.Robots)
 	}
+	if got, ok := commandValue(worldSpec.Command, "--cameras"); !ok || got != "1" {
+		t.Fatalf("world camera selection=%q, present=%t", got, ok)
+	}
 	appSpec := engine.started[1]
 	if appSpec.Name != "simenv-robot1" {
 		t.Fatalf("app name=%s", appSpec.Name)
@@ -223,6 +227,9 @@ func TestStartWorldThenApp(t *testing.T) {
 		if !strings.Contains(joined, arg) {
 			t.Fatalf("app command missing %s: %v", arg, appSpec.Command)
 		}
+	}
+	if !strings.Contains(joined, "bridge_rgbd:=true") {
+		t.Fatalf("app command missing camera bridge: %v", appSpec.Command)
 	}
 	if appSpec.Labels[vehicleRobotLabel] != "robot1" || appSpec.Labels[vehicleIndexLabel] != "1" {
 		t.Fatalf("app labels=%v", appSpec.Labels)
@@ -315,7 +322,7 @@ func TestStartRejectsEmptyAppImage(t *testing.T) {
 }
 
 func TestEasyGoLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
-	args := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}, easyGoRuntimeFor(1), false, false)
+	args := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}, easyGoRuntimeFor(1), false, false, false)
 	if !containsAny(args, "robot_name:=fleet/robot1") {
 		t.Fatalf("args=%v", args)
 	}
@@ -326,21 +333,25 @@ func TestEasyGoLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
 
 func TestEasyGoLaunchTogglesViewersIndependently(t *testing.T) {
 	robot := contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "robot1"}
-	headless := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), false, false)
+	headless := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), false, false, false)
 	if !containsAny(headless, "use_gz_gui:=false") || !containsAny(headless, "use_rviz:=false") {
 		t.Fatalf("headless args=%v", headless)
 	}
-	rvizOnly := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), true, false)
+	rvizOnly := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), true, false, false)
 	if !containsAny(rvizOnly, "use_rviz:=true") || !containsAny(rvizOnly, "use_gz_gui:=false") {
 		t.Fatalf("rviz-only args=%v", rvizOnly)
 	}
-	gzGuiOnly := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), false, true)
+	gzGuiOnly := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), false, true, false)
 	if !containsAny(gzGuiOnly, "use_gz_gui:=true") || !containsAny(gzGuiOnly, "use_rviz:=false") {
 		t.Fatalf("gz-gui-only args=%v", gzGuiOnly)
 	}
-	both := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), true, true)
+	both := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), true, true, false)
 	if !containsAny(both, "use_gz_gui:=true") || !containsAny(both, "use_rviz:=true") {
 		t.Fatalf("both args=%v", both)
+	}
+	cameras := easyGoLaunchArgs(robot, easyGoRuntimeFor(1), false, false, true)
+	if !containsAny(cameras, "bridge_rgbd:=true") {
+		t.Fatalf("camera args=%v", cameras)
 	}
 }
 
@@ -453,6 +464,15 @@ func containsAny(items []string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func commandValue(command []string, flag string) (string, bool) {
+	for i, item := range command {
+		if item == flag && i+1 < len(command) {
+			return command[i+1], true
+		}
+	}
+	return "", false
 }
 
 func TestViewersArePerRobot(t *testing.T) {
