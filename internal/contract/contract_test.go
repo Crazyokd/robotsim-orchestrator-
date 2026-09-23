@@ -107,6 +107,30 @@ func TestStartConfigBuildsNeutralSession(t *testing.T) {
 	}
 }
 
+func TestSessionCarriesCamerasPerRobot(t *testing.T) {
+	session, err := StartConfig{
+		Robots:       3,
+		World:        "simple",
+		AppImage:     "img",
+		EnvImage:     "env",
+		Partition:    DefaultPartition,
+		CameraRobots: []int{2},
+	}.Session()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []bool{false, true, false}
+	for i, robot := range session.Robots {
+		if robot.Cameras != want[i] {
+			t.Fatalf("robot%d cameras=%t want %t", robot.Index, robot.Cameras, want[i])
+		}
+	}
+	cfg := StartConfig{Robots: 2, World: "w", AppImage: "a", EnvImage: "e", CameraRobots: []int{3}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("camera robot 3 must fail with 2 robots")
+	}
+}
+
 func TestSessionJSONDoesNotExposeEasyGoRuntime(t *testing.T) {
 	session, err := StartConfig{
 		Robots: 2, World: "simple", AppImage: "img", EnvImage: "env", Partition: DefaultPartition,

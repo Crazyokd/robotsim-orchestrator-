@@ -40,7 +40,12 @@ func run(args []string) error {
 	}
 	bodies := make([]world.Body, 0, len(session.Robots))
 	for _, robot := range session.Robots {
-		bodies = append(bodies, world.Body{Name: robot.Name, TopicPrefix: robot.TopicPrefix, Pose: robot.Pose})
+		bodies = append(bodies, world.Body{
+			Name:        robot.Name,
+			TopicPrefix: robot.TopicPrefix,
+			Pose:        robot.Pose,
+			KeepCameras: robot.Cameras,
+		})
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

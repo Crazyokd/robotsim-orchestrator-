@@ -489,6 +489,7 @@ func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime, useRviz, useG
 		fmt.Sprintf("use_gz_gui:=%t", useGzGui),
 		fmt.Sprintf("use_rviz:=%t", useRviz),
 		"enable_person_follow:=false",
+		fmt.Sprintf("bridge_rgbd:=%t", robot.Cameras),
 		"enable_multi_robot_wifi:=true",
 		"robot_name:=" + robot.TopicPrefix,
 		"runtime_root:=" + runtime.runtimeRoot,

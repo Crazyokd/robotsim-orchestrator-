@@ -30,6 +30,7 @@ type Body struct {
 	Name        string
 	TopicPrefix string
 	Pose        contract.Pose
+	KeepCameras bool
 }
 
 type Process struct {
@@ -80,7 +81,7 @@ func (p Process) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read model: %w", err)
 		}
-		rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.TopicPrefix, body.Pose.Yaw)
+		rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.TopicPrefix, body.Pose.Yaw, body.KeepCameras)
 		if err != nil {
 			return err
 		}

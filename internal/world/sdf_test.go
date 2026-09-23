@@ -9,9 +9,9 @@ const sourceSDF = `<?xml version="1.0"?>
 <sdf version="1.7">
   <model name="easygo_bj_bkn_description">
     <link name="base_link">
-      <sensor name="front_rgb" type="camera"><topic>front_rgb</topic></sensor>
-      <sensor name="front_depth" type="depth_camera"><topic>front_depth</topic></sensor>
-      <sensor name="lidar" type="gpu_lidar"><topic>scan</topic></sensor>
+      <sensor name="front_rgb" type="camera"><update_rate>30</update_rate><topic>front_rgb</topic></sensor>
+      <sensor name="front_depth" type="depth_camera"><update_rate>30</update_rate><topic>front_depth</topic></sensor>
+      <sensor name="lidar" type="gpu_lidar"><update_rate>10</update_rate><topic>scan</topic></sensor>
     </link>
     <static>0</static>
     <plugin name="gz::sim::systems::DiffDrive" filename="gz-sim-diff-drive-system">
@@ -27,7 +27,7 @@ const sourceSDF = `<?xml version="1.0"?>
 `
 
 func TestRewriteNamespacesTopicsKeepsFrames(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0.5)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0.5, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +54,39 @@ func TestRewriteNamespacesTopicsKeepsFrames(t *testing.T) {
 	}
 }
 
+func TestRewriteKeepsCamerasWhenAsked(t *testing.T) {
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `type="camera"`) {
+		t.Fatalf("color camera must be kept: %s", out)
+	}
+	if !strings.Contains(out, `type="depth_camera"`) {
+		t.Fatalf("depth camera must be kept: %s", out)
+	}
+	// Camera topics are namespaced like every other sensor topic.
+	if !strings.Contains(out, "<topic>/robot1/front_rgb</topic>") {
+		t.Fatalf("camera topic not prefixed: %s", out)
+	}
+	if !strings.Contains(out, "<topic>/robot1/front_depth</topic>") {
+		t.Fatalf("depth topic not prefixed: %s", out)
+	}
+	// Camera rendering is serialized in the world step, so kept cameras are
+	// throttled off their 30 Hz model default. The lidar keeps its own rate.
+	if strings.Contains(out, "<update_rate>30</update_rate>") {
+		t.Fatalf("camera update rate not throttled: %s", out)
+	}
+	if !strings.Contains(out, "<update_rate>5</update_rate>") {
+		t.Fatalf("throttled camera rate missing: %s", out)
+	}
+	if !strings.Contains(out, "<update_rate>10</update_rate>") {
+		t.Fatalf("lidar rate must be untouched: %s", out)
+	}
+}
+
 func TestRewriteTruthOdomRenamesWheelTopics(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +102,7 @@ func TestRewriteTruthOdomRenamesWheelTopics(t *testing.T) {
 }
 
 func TestRewriteUsesTopicPrefixSeparatelyFromModelName(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", "fleet/robot1", 0)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "fleet/robot1", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

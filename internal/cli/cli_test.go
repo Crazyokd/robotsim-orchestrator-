@@ -77,14 +77,31 @@ func TestStartParsesViewerRobotsPerFlag(t *testing.T) {
 	}
 }
 
+func TestStartParsesCameraRobots(t *testing.T) {
+	orch := &fakeOrch{}
+	err := Run([]string{
+		"start", "--robots", "3", "--world", "simple", "--app-image", "runtime-sim:v1",
+		"--cameras", "2,3",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, orch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orch.started.CameraRobots) != 2 || orch.started.CameraRobots[0] != 2 || orch.started.CameraRobots[1] != 3 {
+		t.Fatalf("camera robots=%v", orch.started.CameraRobots)
+	}
+	if orch.started.WantsCameras(1) || !orch.started.WantsCameras(2) {
+		t.Fatal("WantsCameras mismatch")
+	}
+}
+
 func TestStartDefaultsToNoViewers(t *testing.T) {
 	orch := &fakeOrch{}
 	err := Run([]string{"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1"}, &bytes.Buffer{}, &bytes.Buffer{}, orch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(orch.started.RvizRobots) != 0 || len(orch.started.GzGuiRobots) != 0 {
-		t.Fatalf("viewers=%v/%v", orch.started.RvizRobots, orch.started.GzGuiRobots)
+	if len(orch.started.RvizRobots) != 0 || len(orch.started.GzGuiRobots) != 0 || len(orch.started.CameraRobots) != 0 {
+		t.Fatalf("viewers=%v/%v cameras=%v", orch.started.RvizRobots, orch.started.GzGuiRobots, orch.started.CameraRobots)
 	}
 }
 

@@ -60,6 +60,7 @@ func parseStart(args []string) (contract.StartConfig, error) {
 	posesText := fs.String("poses", "", "")
 	rvizText := fs.String("rviz", "", "")
 	gzGuiText := fs.String("gz-gui", "", "")
+	camerasText := fs.String("cameras", "", "")
 	if err := fs.Parse(args); err != nil {
 		return contract.StartConfig{}, err
 	}
@@ -78,16 +79,21 @@ func parseStart(args []string) (contract.StartConfig, error) {
 	if err != nil {
 		return contract.StartConfig{}, err
 	}
+	cameraRobots, err := parseRobotIndices("cameras", *camerasText)
+	if err != nil {
+		return contract.StartConfig{}, err
+	}
 	return contract.StartConfig{
-		Robots:      *robots,
-		World:       *worldName,
-		AppImage:    *appImage,
-		EnvImage:    *envImage,
-		Partition:   *partition,
-		DataRoot:    *dataRoot,
-		Poses:       poses,
-		RvizRobots:  rvizRobots,
-		GzGuiRobots: gzGuiRobots,
+		Robots:       *robots,
+		World:        *worldName,
+		AppImage:     *appImage,
+		EnvImage:     *envImage,
+		Partition:    *partition,
+		DataRoot:     *dataRoot,
+		Poses:        poses,
+		RvizRobots:   rvizRobots,
+		GzGuiRobots:  gzGuiRobots,
+		CameraRobots: cameraRobots,
 	}, nil
 }
 

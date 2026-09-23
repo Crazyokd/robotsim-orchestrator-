@@ -36,18 +36,23 @@ type Robot struct {
 	Name        string
 	TopicPrefix string
 	Pose        Pose
+	// Cameras keeps the model's camera and depth_camera sensors. They are
+	// stripped by default because they are render-backed sensors the
+	// navigation stack does not need.
+	Cameras bool
 }
 
 type StartConfig struct {
-	Robots      int
-	World       string
-	AppImage    string
-	EnvImage    string
-	Partition   string
-	DataRoot    string
-	Poses       []Pose
-	RvizRobots  []int
-	GzGuiRobots []int
+	Robots       int
+	World        string
+	AppImage     string
+	EnvImage     string
+	Partition    string
+	DataRoot     string
+	Poses        []Pose
+	RvizRobots   []int
+	GzGuiRobots  []int
+	CameraRobots []int
 }
 
 // WantsRviz reports whether the given robot index was asked to run RViz.
@@ -58,6 +63,12 @@ func (c StartConfig) WantsRviz(index int) bool {
 // WantsGzGui reports whether the given robot index was asked to run the Gazebo GUI.
 func (c StartConfig) WantsGzGui(index int) bool {
 	return containsIndex(c.GzGuiRobots, index)
+}
+
+// WantsCameras reports whether the given robot index was asked to keep its
+// camera sensors.
+func (c StartConfig) WantsCameras(index int) bool {
+	return containsIndex(c.CameraRobots, index)
 }
 
 func containsIndex(indices []int, index int) bool {
@@ -111,6 +122,9 @@ func (c StartConfig) Validate() error {
 	if err := validateViewerRobots("gz-gui", c.GzGuiRobots, c.Robots); err != nil {
 		return err
 	}
+	if err := validateViewerRobots("cameras", c.CameraRobots, c.Robots); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -130,6 +144,9 @@ func (c StartConfig) Session() (Session, error) {
 	robots, err := c.RobotsSpec()
 	if err != nil {
 		return Session{}, err
+	}
+	for i := range robots {
+		robots[i].Cameras = containsIndex(c.CameraRobots, robots[i].Index)
 	}
 	session := Session{World: c.World, Partition: c.Partition, Robots: robots}
 	if err := session.Validate(); err != nil {
