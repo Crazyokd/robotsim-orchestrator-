@@ -68,7 +68,11 @@ ros2 launch easygo_sim_bringup sim_easygo.launch.py
 
 以及 EasyGoVehicle 实现要求的端口、domain、`GZ_*`、`/sros` 挂载。host network，与现网车端一致，GZ localhost 才能通。
 
-默认 headless。观察视图按车开关：`--rviz 1,3` 给指定车开 RViz web，`--gz-gui 1` 开 web-gz 3D（对应 `use_rviz` / `use_gz_gui` 传 `true`，端口按契约算术）。观察进程在程序容器内跑，连环境容器起的 server。不启用驾驶台与语音。
+默认 headless。观察视图按车开关：`--rviz 1,3` 给指定车开 RViz web，`--gz-gui 1` 开 web-gz 3D（对应 `use_rviz` / `use_gz_gui` 传 `true`，端口按契约算术）。观察进程在程序容器内跑，连环境容器起的 server。
+
+两者的归属不同：web-gz 渲染的是整个世界，一个窗口就包含所有车，多开只多买一台跟随镜头、代价是又一份全场景渲染（约 5.4 核/份）；RViz 连各车独立的 ROS domain，只看得到自己那台车，因此要按车开（约 0.6 核/车）。
+
+不启用驾驶台与语音。
 
 ## 5. 仓布局
 

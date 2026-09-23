@@ -29,6 +29,8 @@ docker build -f deploy/Dockerfile -t simenv-world:local .
 
 加 `--rviz` / `--gz-gui` 开观察视图（按车编号逗号分隔，如 `--rviz 1,3` 只给 robot1 和 robot3 开）：web-gz 3D 在 `http://127.0.0.1:6180/vnc.html`，RViz web 在 `http://127.0.0.1:6181/vnc.html`（端口按契约算术 `base+100N`）。默认 headless。
 
+**gz-gui 一个就够，不要每车一个。** GUI 渲染的是整个世界，收到什么画什么——`--gz-gui 1` 的单窗口里所有车都在画面里，`WEBGZ_FOLLOW_TARGET` 只决定相机跟谁、不决定画谁。每多开一个 GUI 买到的只是一台额外的自动跟随镜头，代价是又一份全场景渲染（约 5.4 核 / 车）。RViz 则相反，它连的是各车独立的 ROS domain，只能看见自己那台车，所以要按车开。
+
 N=1 的 API 是 `http://127.0.0.1:18189/api/v6`，不是 `:18089`。
 
 **3. 验收。**
