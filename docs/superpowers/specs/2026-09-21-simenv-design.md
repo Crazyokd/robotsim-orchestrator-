@@ -68,7 +68,7 @@ ros2 launch easygo_sim_bringup sim_easygo.launch.py
 
 以及 EasyGoVehicle 实现要求的端口、domain、`GZ_*`、`/sros` 挂载。host network，与现网车端一致，GZ localhost 才能通。
 
-默认 headless。v1 不起驾驶台、观察台、RViz。
+默认 headless。`--gui` 启用程序侧的 web-gz 3D 视图与 RViz web（`use_gz_gui:=true`、`use_rviz:=true`，端口按契约算术），观察进程在程序容器内跑，连环境容器起的 server。不启用驾驶台与语音。
 
 ## 5. 仓布局
 
@@ -89,7 +89,7 @@ worlds / 机器人 SDF 在**构建环境镜像时**从 pinned 的 EasyGo 修订�
 
 ## 6. v1 验收
 
-默认 `--robots 1`、`--world simple`、headless。
+默认 `--robots 1`、`--world simple`、headless；`--gui` 可开观察视图。
 
 1. `simenv start --robots 1 --world simple --app-image <runtime-sim tag>` 退出 0。
 2. 环境容器在跑：Gazebo server、GZ `clock` 在走、实体 `robot1` 已 spawn。进程列表里没有 easygo-app / slam_mapping / nav2。

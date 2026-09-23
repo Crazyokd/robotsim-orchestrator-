@@ -27,6 +27,8 @@ docker build -f deploy/Dockerfile -t simenv-world:local .
 ./simenv start --robots 1 --world simple --app-image docker-registry.nowhere.sr/easygo/runtime-sim:<tag>
 ```
 
+加 `--gui` 开观察视图：web-gz 3D 在 `http://127.0.0.1:6180/vnc.html`，RViz web 在 `http://127.0.0.1:6181/vnc.html`（端口按契约算术 `base+100N`）。默认 headless。
+
 N=1 的 API 是 `http://127.0.0.1:18189/api/v6`，不是 `:18089`。
 
 **3. 验收。**
@@ -34,6 +36,7 @@ N=1 的 API 是 `http://127.0.0.1:18189/api/v6`，不是 `:18089`。
 - `./simenv status`：world running、clock、robots 含 `robot1`、app running、`connected=true`
 - 环境容器进程没有 easygo-app / slam_mapping / nav2
 - 程序在跑时 `GET http://127.0.0.1:18189/api/v6/vehicle/status` 可达
+- 带 `--gui` 时 `:6180`、`:6181` 的 noVNC 页面返回 200
 - 本机没 Gazebo / `runtime-sim` 时写明未验证。没跑过多车不是环境缺陷
 
 **4. 停止。** `./simenv stop`。两边停干净，`18189` 释放。
