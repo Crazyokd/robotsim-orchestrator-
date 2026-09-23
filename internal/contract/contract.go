@@ -46,6 +46,7 @@ type StartConfig struct {
 	Partition string
 	DataRoot  string
 	Poses     []Pose
+	GUI       bool
 }
 
 func RobotName(index int) string {

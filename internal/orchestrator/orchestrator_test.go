@@ -198,12 +198,23 @@ func TestStartRejectsEmptyAppImage(t *testing.T) {
 }
 
 func TestEasyGoLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
-	args := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}, easyGoRuntimeFor(1))
+	args := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}, easyGoRuntimeFor(1), false)
 	if !containsAny(args, "robot_name:=fleet/robot1") {
 		t.Fatalf("args=%v", args)
 	}
 	if !containsAny(args, "serial_number:=robot1") {
 		t.Fatalf("args=%v", args)
+	}
+}
+
+func TestEasyGoLaunchGuiFlagTogglesViewers(t *testing.T) {
+	headless := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "robot1"}, easyGoRuntimeFor(1), false)
+	if !containsAny(headless, "use_gz_gui:=false") || !containsAny(headless, "use_rviz:=false") {
+		t.Fatalf("headless args=%v", headless)
+	}
+	gui := easyGoLaunchArgs(contract.Robot{Index: 1, Name: "robot1", TopicPrefix: "robot1"}, easyGoRuntimeFor(1), true)
+	if !containsAny(gui, "use_gz_gui:=true") || !containsAny(gui, "use_rviz:=true") {
+		t.Fatalf("gui args=%v", gui)
 	}
 }
 

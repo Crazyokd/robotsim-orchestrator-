@@ -57,6 +57,7 @@ func parseStart(args []string) (contract.StartConfig, error) {
 	partition := fs.String("partition", contract.DefaultPartition, "")
 	dataRoot := fs.String("data-root", "", "")
 	posesText := fs.String("poses", "", "")
+	gui := fs.Bool("gui", false, "")
 	if err := fs.Parse(args); err != nil {
 		return contract.StartConfig{}, err
 	}
@@ -75,6 +76,7 @@ func parseStart(args []string) (contract.StartConfig, error) {
 		Partition: *partition,
 		DataRoot:  *dataRoot,
 		Poses:     poses,
+		GUI:       *gui,
 	}, nil
 }
 

@@ -257,7 +257,7 @@ func (v EasyGoVehicle) Start(ctx context.Context, session contract.Session, robo
 		return err
 	}
 	runtime := easyGoRuntimeFor(robot.Index)
-	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(robot, runtime)...)
+	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(robot, runtime, cfg.GUI)...)
 	if err := v.Engine.Start(ctx, ContainerSpec{
 		Name:    contract.AppContainer(robot.Name),
 		Image:   cfg.AppImage,
@@ -386,11 +386,11 @@ func easyGoRuntimeFor(index int) easyGoRuntime {
 	}
 }
 
-func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime) []string {
+func easyGoLaunchArgs(robot contract.Robot, runtime easyGoRuntime, gui bool) []string {
 	return []string{
 		"start_gazebo:=false",
-		"use_gz_gui:=false",
-		"use_rviz:=false",
+		fmt.Sprintf("use_gz_gui:=%t", gui),
+		fmt.Sprintf("use_rviz:=%t", gui),
 		"enable_person_follow:=false",
 		"enable_multi_robot_wifi:=true",
 		"robot_name:=" + robot.TopicPrefix,
