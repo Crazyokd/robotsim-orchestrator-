@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,7 +21,7 @@ type ReadyReport struct {
 }
 
 type Transport interface {
-	StartSim(ctx context.Context, worldPath string) error
+	StartSim(ctx context.Context, worldPath string) (<-chan error, error)
 	WaitClock(ctx context.Context) error
 	CreateEntity(ctx context.Context, world, name, sdfPath string, pose contract.Pose) error
 }
@@ -38,7 +39,6 @@ type Process struct {
 	Transport  Transport
 	WorldName  string
 	Bodies     []Body
-	Hold       func(context.Context) error
 }
 
 func (p Process) Run(ctx context.Context) error {
@@ -57,11 +57,22 @@ func (p Process) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := p.Transport.StartSim(ctx, worldPath); err != nil {
+	server, err := p.Transport.StartSim(ctx, worldPath)
+	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	go func() {
+		if err := <-server; err != nil {
+			cancel(err)
+			return
+		}
+		cancel(errServerExited)
+	}()
+
 	if err := p.Transport.WaitClock(ctx); err != nil {
-		return err
+		return causeOr(ctx, err)
 	}
 	names := make([]string, 0, len(p.Bodies))
 	for _, body := range p.Bodies {
@@ -78,7 +89,7 @@ func (p Process) Run(ctx context.Context) error {
 			return err
 		}
 		if err := p.Transport.CreateEntity(ctx, worldSDFName, body.Name, sdfPath, body.Pose); err != nil {
-			return err
+			return causeOr(ctx, err)
 		}
 		names = append(names, body.Name)
 	}
@@ -86,8 +97,22 @@ func (p Process) Run(ctx context.Context) error {
 	if err := writeReady(p.ReadyPath, report); err != nil {
 		return err
 	}
-	if p.Hold != nil {
-		return p.Hold(ctx)
+	<-ctx.Done()
+	return stopped(ctx)
+}
+
+var errServerExited = errors.New("world server exited")
+
+func causeOr(ctx context.Context, err error) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	return err
+}
+
+func stopped(ctx context.Context) error {
+	if cause := context.Cause(ctx); !errors.Is(cause, context.Canceled) {
+		return cause
 	}
 	return nil
 }

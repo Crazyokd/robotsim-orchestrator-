@@ -27,15 +27,24 @@ func (g GZ) run(ctx context.Context, name string, args ...string) ([]byte, error
 	return out, nil
 }
 
-func (g GZ) StartSim(ctx context.Context, worldPath string) error {
+func (g GZ) StartSim(ctx context.Context, worldPath string) (<-chan error, error) {
 	cmd := exec.CommandContext(ctx, "gz", "sim", "-s", "--headless-rendering", "-r", "-v", "1", worldPath)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start gz sim: %w", err)
+		return nil, fmt.Errorf("start gz sim: %w", err)
 	}
-	go func() { _ = cmd.Wait() }()
-	return nil
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		if err != nil && ctx.Err() == nil {
+			err = fmt.Errorf("gz sim exited: %w\n%s", err, stderr.String())
+		} else {
+			err = nil
+		}
+		done <- err
+	}()
+	return done, nil
 }
 
 func (g GZ) WaitClock(ctx context.Context) error {

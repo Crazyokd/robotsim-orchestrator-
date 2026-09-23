@@ -51,10 +51,6 @@ func run(args []string) error {
 		Transport:  world.GZ{},
 		WorldName:  session.World,
 		Bodies:     bodies,
-		Hold: func(ctx context.Context) error {
-			<-ctx.Done()
-			return nil
-		},
 	}
 	return proc.Run(ctx)
 }
