@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,8 @@ import (
 type DockerEngine struct {
 	HTTP *http.Client
 }
+
+var errContainerAlreadyStopped = errors.New("container already stopped")
 
 func NewDockerEngine() (DockerEngine, error) {
 	transport := &http.Transport{
@@ -89,7 +92,7 @@ func deviceMappings(devices []string) []map[string]string {
 
 func (d DockerEngine) Stop(ctx context.Context, name string) error {
 	err := d.json(ctx, http.MethodPost, "/containers/"+url.PathEscape(name)+"/stop?t=20", nil, nil)
-	if err != nil && !isNotFound(err) {
+	if err != nil && !isNotFound(err) && !errors.Is(err, errContainerAlreadyStopped) {
 		return err
 	}
 	err = d.json(ctx, http.MethodDelete, "/containers/"+url.PathEscape(name)+"?force=true", nil, nil)
@@ -212,6 +215,9 @@ func (d DockerEngine) raw(ctx context.Context, method, path string, body any) ([
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return payload, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(string(payload)))
+	}
+	if resp.StatusCode == http.StatusNotModified {
+		return payload, errContainerAlreadyStopped
 	}
 	if resp.StatusCode >= 300 {
 		return payload, fmt.Errorf("docker %s %s: %s", method, path, strings.TrimSpace(string(payload)))

@@ -1,6 +1,27 @@
 package orchestrator
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func dockerResponse(status int) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Body:       io.NopCloser(strings.NewReader("")),
+		Header:     make(http.Header),
+	}
+}
 
 func TestStripDockerStreamPlain(t *testing.T) {
 	if got := stripDockerStream([]byte(`{"clock":true}`)); got != `{"clock":true}` {
@@ -11,6 +32,42 @@ func TestStripDockerStreamPlain(t *testing.T) {
 func TestIsNotFound(t *testing.T) {
 	if !isNotFound(ErrNotFound) {
 		t.Fatal("plain ErrNotFound")
+	}
+}
+
+func TestDockerStopDeletesAlreadyStoppedContainer(t *testing.T) {
+	var requests []string
+	engine := DockerEngine{
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests = append(requests, req.Method+" "+req.URL.RequestURI())
+				switch len(requests) {
+				case 1:
+					return dockerResponse(http.StatusNotModified), nil
+				case 2:
+					return dockerResponse(http.StatusNoContent), nil
+				default:
+					t.Fatalf("unexpected request %v", req)
+					return nil, nil
+				}
+			}),
+		},
+	}
+
+	if err := engine.Stop(context.Background(), "robot1"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"POST /containers/robot1/stop?t=20",
+		"DELETE /containers/robot1?force=true",
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("requests=%v, want %v", requests, want)
+	}
+	for i := range want {
+		if requests[i] != want[i] {
+			t.Fatalf("requests=%v, want %v", requests, want)
+		}
 	}
 }
 
