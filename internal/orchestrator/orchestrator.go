@@ -173,13 +173,12 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 }
 
 func (o Orchestrator) Stop(ctx context.Context) error {
-	vehiclePorts, err := o.vehicleFactory(contract.StartConfig{}).Discover(ctx)
-	if err != nil {
-		return err
-	}
+	worldPort := o.worldPort(contract.StartConfig{})
+	vehiclePorts, discoverErr := o.vehicleFactory(contract.StartConfig{}).Discover(ctx)
 	return errors.Join(
+		discoverErr,
 		stopVehiclePorts(ctx, vehiclePorts),
-		o.worldPort(contract.StartConfig{}).Stop(ctx),
+		worldPort.Stop(ctx),
 	)
 }
 

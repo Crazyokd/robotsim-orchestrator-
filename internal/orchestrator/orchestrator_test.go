@@ -113,9 +113,10 @@ func (f *fakeVehiclePort) Stop(context.Context) error {
 }
 
 type fakeVehicleFactory struct {
-	ports     []*fakeVehiclePort
-	failRobot string
-	stopOrder []string
+	ports       []*fakeVehiclePort
+	failRobot   string
+	stopOrder   []string
+	discoverErr error
 }
 
 func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
@@ -138,6 +139,9 @@ func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot)
 }
 
 func (f *fakeVehicleFactory) Discover(context.Context) ([]VehiclePort, error) {
+	if f.discoverErr != nil {
+		return nil, f.discoverErr
+	}
 	ports := make([]VehiclePort, 0, len(f.ports))
 	for _, port := range f.ports {
 		ports = append(ports, port)
@@ -369,6 +373,23 @@ func TestStopStopsWorldAndApps(t *testing.T) {
 	}
 	if len(engine.stopped) != 2 {
 		t.Fatalf("stopped=%v", engine.stopped)
+	}
+}
+
+func TestStopStopsWorldWhenVehicleDiscoveryFails(t *testing.T) {
+	worldPort := &fakeWorldPort{}
+	discoverErr := errors.New("vehicle discovery failed")
+	orch := Orchestrator{
+		World:          worldPort,
+		VehicleFactory: &fakeVehicleFactory{discoverErr: discoverErr},
+	}
+
+	err := orch.Stop(context.Background())
+	if !errors.Is(err, discoverErr) {
+		t.Fatalf("error=%v, want %v", err, discoverErr)
+	}
+	if !worldPort.stopped {
+		t.Fatal("world was not stopped")
 	}
 }
 
