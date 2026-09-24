@@ -21,6 +21,10 @@ type fakeEngine struct {
 	execErr error
 }
 
+type blockingReadyEngine struct {
+	fakeEngine
+}
+
 func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {
 	return "sha256:" + ref, nil
 }
@@ -65,6 +69,11 @@ func (f *fakeEngine) List(_ context.Context) ([]ContainerInfo, error) {
 		out = append(out, info)
 	}
 	return out, nil
+}
+
+func (f *blockingReadyEngine) Exec(ctx context.Context, name string, cmd []string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
 }
 
 type fakeWorldPort struct {
@@ -273,6 +282,20 @@ func TestWaitReadyRequiresAllSessionRobots(t *testing.T) {
 	}
 }
 
+func TestWaitReadyEnforcesItsOwnTimeout(t *testing.T) {
+	session := contract.Session{
+		World:     "simple",
+		Partition: contract.DefaultPartition,
+		Robots:    []contract.Robot{{Index: 1, Name: "robot1", TopicPrefix: "robot1"}},
+	}
+	engine := &blockingReadyEngine{}
+
+	_, err := waitReadyWithTimeout(context.Background(), engine, nil, session, 10*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error=%v, want deadline exceeded", err)
+	}
+}
+
 func TestStatusAggregatesIndependentVehiclePorts(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]ContainerInfo{
 		contract.WorldContainer: {Name: contract.WorldContainer, Running: true, Image: "env"},
@@ -301,6 +324,30 @@ func TestStatusAggregatesIndependentVehiclePorts(t *testing.T) {
 	}
 	if status.Connected {
 		t.Fatalf("stopped vehicle must disconnect the session: %+v", status)
+	}
+}
+
+func TestDockerWorldStatusReportsNotReadyWithoutError(t *testing.T) {
+	for _, output := range []string{
+		"",
+		"cat: /tmp/simenv/ready.json: No such file or directory",
+	} {
+		t.Run(output, func(t *testing.T) {
+			engine := &fakeEngine{
+				infos: map[string]ContainerInfo{
+					contract.WorldContainer: {Name: contract.WorldContainer, Running: true},
+				},
+				ready: output,
+			}
+
+			_, ready, err := (DockerWorld{Engine: engine}).Status(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ready.Clock || len(ready.Robots) != 0 {
+				t.Fatalf("ready=%+v", ready)
+			}
+		})
 	}
 }
 

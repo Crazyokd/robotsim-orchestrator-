@@ -132,6 +132,49 @@ func TestDockerStartReturnsStopError(t *testing.T) {
 	}
 }
 
+func TestDockerStartRemovesContainerWhenStartFails(t *testing.T) {
+	var requests []string
+	engine := DockerEngine{
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests = append(requests, req.Method+" "+req.URL.RequestURI())
+				switch len(requests) {
+				case 1:
+					return dockerResponseBody(http.StatusNotFound, "missing"), nil
+				case 2:
+					return dockerResponseBody(http.StatusCreated, `{"Id":"created-id"}`), nil
+				case 3:
+					return dockerResponseBody(http.StatusInternalServerError, "start failed"), nil
+				case 4:
+					return dockerResponse(http.StatusNoContent), nil
+				default:
+					t.Fatalf("unexpected request %v", req)
+					return nil, nil
+				}
+			}),
+		},
+	}
+
+	err := engine.Start(context.Background(), ContainerSpec{Name: "robot1"})
+	if err == nil || !strings.Contains(err.Error(), "start failed") {
+		t.Fatalf("error=%v", err)
+	}
+	want := []string{
+		"GET /containers/robot1/json",
+		"POST /containers/create?name=robot1",
+		"POST /containers/created-id/start",
+		"DELETE /containers/created-id?force=true",
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("requests=%v, want %v", requests, want)
+	}
+	for i := range want {
+		if requests[i] != want[i] {
+			t.Fatalf("requests=%v, want %v", requests, want)
+		}
+	}
+}
+
 func TestDeviceMappings(t *testing.T) {
 	got := deviceMappings([]string{"/dev/dri", "/dev/foo:/dev/bar"})
 	if len(got) != 2 {

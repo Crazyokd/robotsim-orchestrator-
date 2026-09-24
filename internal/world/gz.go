@@ -3,6 +3,7 @@ package world
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -48,21 +49,29 @@ func (g GZ) StartSim(ctx context.Context, worldPath string) (<-chan error, error
 }
 
 func (g GZ) WaitClock(ctx context.Context) error {
-	deadline := time.Now().Add(2 * time.Minute)
+	return g.waitClockWithTimeout(ctx, 2*time.Minute)
+}
+
+func (g GZ) waitClockWithTimeout(ctx context.Context, timeout time.Duration) error {
+	clockCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := clockCtx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("timed out waiting for gz clock: %w", err)
+			}
 			return err
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for gz clock")
-		}
-		out, err := g.run(ctx, "gz", "topic", "-l")
+		out, err := g.run(clockCtx, "gz", "topic", "-l")
 		if err == nil && bytes.Contains(out, []byte("clock")) {
 			return nil
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-clockCtx.Done():
+			if errors.Is(clockCtx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("timed out waiting for gz clock: %w", clockCtx.Err())
+			}
+			return clockCtx.Err()
 		case <-time.After(500 * time.Millisecond):
 		}
 	}

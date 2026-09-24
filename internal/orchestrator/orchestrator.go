@@ -122,7 +122,6 @@ type Orchestrator struct {
 	Engine         Engine
 	World          WorldPort
 	VehicleFactory VehiclePortFactory
-	Now            func() time.Time
 	Sleep          func(context.Context, time.Duration) error
 }
 
@@ -321,6 +320,9 @@ func (w DockerWorld) Status(ctx context.Context) (ContainerInfo, world.ReadyRepo
 		return worldInfo, world.ReadyReport{}, nil
 	}
 	ready, err := readReady(ctx, w.Engine)
+	if errors.Is(err, errWorldNotReady) {
+		return worldInfo, world.ReadyReport{}, nil
+	}
 	if err != nil {
 		return worldInfo, world.ReadyReport{}, fmt.Errorf("read world readiness: %w", err)
 	}
@@ -482,6 +484,12 @@ func withDefaults(cfg contract.StartConfig) contract.StartConfig {
 }
 
 func waitReady(ctx context.Context, engine Engine, sleep func(context.Context, time.Duration) error, session contract.Session) (world.ReadyReport, error) {
+	return waitReadyWithTimeout(ctx, engine, sleep, session, 3*time.Minute)
+}
+
+func waitReadyWithTimeout(ctx context.Context, engine Engine, sleep func(context.Context, time.Duration) error, session contract.Session, timeout time.Duration) (world.ReadyReport, error) {
+	readyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	if sleep == nil {
 		sleep = func(ctx context.Context, d time.Duration) error {
 			t := time.NewTimer(d)
@@ -494,23 +502,21 @@ func waitReady(ctx context.Context, engine Engine, sleep func(context.Context, t
 			}
 		}
 	}
-	deadline := time.Now().Add(3 * time.Minute)
 	for {
-		report, err := readReady(ctx, engine)
+		report, err := readReady(readyCtx, engine)
 		if err == nil && readyReportMatches(report, session) {
 			return report, nil
 		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				return world.ReadyReport{}, fmt.Errorf("world not ready: %w", err)
-			}
-			return world.ReadyReport{}, fmt.Errorf("world not ready")
+		if readyErr := readyCtx.Err(); readyErr != nil {
+			return world.ReadyReport{}, fmt.Errorf("world not ready: %w", readyErr)
 		}
-		if err := sleep(ctx, 200*time.Millisecond); err != nil {
+		if err := sleep(readyCtx, 200*time.Millisecond); err != nil {
 			return world.ReadyReport{}, err
 		}
 	}
 }
+
+var errWorldNotReady = errors.New("world readiness not available")
 
 func readyReportMatches(report world.ReadyReport, session contract.Session) bool {
 	if !report.Clock || len(report.Robots) != len(session.Robots) {
@@ -537,9 +543,14 @@ func readReady(ctx context.Context, engine Engine) (world.ReadyReport, error) {
 	if err != nil {
 		return world.ReadyReport{}, err
 	}
+	raw := strings.TrimSpace(out)
+	lower := strings.ToLower(raw)
+	if raw == "" || strings.Contains(lower, "no such file or directory") {
+		return world.ReadyReport{}, errWorldNotReady
+	}
 	var report world.ReadyReport
-	if err := json.Unmarshal([]byte(out), &report); err != nil {
-		return world.ReadyReport{}, err
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		return world.ReadyReport{}, fmt.Errorf("decode world readiness: %w", err)
 	}
 	return report, nil
 }

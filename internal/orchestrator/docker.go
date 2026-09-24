@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
 )
@@ -73,6 +74,10 @@ func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 		return fmt.Errorf("create %s: %w", spec.Name, err)
 	}
 	if err := d.json(ctx, http.MethodPost, "/containers/"+created.ID+"/start", map[string]any{}, nil); err != nil {
+		cleanupErr := d.removeCreatedContainer(created.ID)
+		if cleanupErr != nil {
+			return fmt.Errorf("start %s: %w", spec.Name, errors.Join(err, fmt.Errorf("remove created container: %w", cleanupErr)))
+		}
 		return fmt.Errorf("start %s: %w", spec.Name, err)
 	}
 	return nil
@@ -99,11 +104,21 @@ func (d DockerEngine) Stop(ctx context.Context, name string) error {
 	if err != nil && !isNotFound(err) && !errors.Is(err, errContainerAlreadyStopped) {
 		return err
 	}
-	err = d.json(ctx, http.MethodDelete, "/containers/"+url.PathEscape(name)+"?force=true", nil, nil)
+	return d.deleteContainer(ctx, name)
+}
+
+func (d DockerEngine) deleteContainer(ctx context.Context, name string) error {
+	err := d.json(ctx, http.MethodDelete, "/containers/"+url.PathEscape(name)+"?force=true", nil, nil)
 	if err != nil && !isNotFound(err) {
 		return err
 	}
 	return nil
+}
+
+func (d DockerEngine) removeCreatedContainer(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return d.deleteContainer(ctx, name)
 }
 
 func (d DockerEngine) Inspect(ctx context.Context, name string) (ContainerInfo, error) {
