@@ -43,7 +43,11 @@ func (d DockerEngine) ImageID(ctx context.Context, ref string) (string, error) {
 
 func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 	if _, err := d.Inspect(ctx, spec.Name); err == nil {
-		_ = d.Stop(ctx, spec.Name)
+		if err := d.Stop(ctx, spec.Name); err != nil {
+			return fmt.Errorf("stop existing container %s: %w", spec.Name, err)
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("inspect existing container %s: %w", spec.Name, err)
 	}
 	env := make([]string, 0, len(spec.Env))
 	for k, v := range spec.Env {

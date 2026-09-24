@@ -15,10 +15,14 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func dockerResponse(status int) *http.Response {
+	return dockerResponseBody(status, "")
+}
+
+func dockerResponseBody(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
 		Status:     http.StatusText(status),
-		Body:       io.NopCloser(strings.NewReader("")),
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     make(http.Header),
 	}
 }
@@ -60,6 +64,63 @@ func TestDockerStopDeletesAlreadyStoppedContainer(t *testing.T) {
 	want := []string{
 		"POST /containers/robot1/stop?t=20",
 		"DELETE /containers/robot1?force=true",
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("requests=%v, want %v", requests, want)
+	}
+	for i := range want {
+		if requests[i] != want[i] {
+			t.Fatalf("requests=%v, want %v", requests, want)
+		}
+	}
+}
+
+func TestDockerStartReturnsInspectError(t *testing.T) {
+	var requests []string
+	engine := DockerEngine{
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests = append(requests, req.Method+" "+req.URL.RequestURI())
+				return dockerResponseBody(http.StatusInternalServerError, "inspect failed"), nil
+			}),
+		},
+	}
+
+	err := engine.Start(context.Background(), ContainerSpec{Name: "robot1"})
+	if err == nil || !strings.Contains(err.Error(), "inspect failed") {
+		t.Fatalf("error=%v", err)
+	}
+	if len(requests) != 1 || requests[0] != "GET /containers/robot1/json" {
+		t.Fatalf("requests=%v", requests)
+	}
+}
+
+func TestDockerStartReturnsStopError(t *testing.T) {
+	var requests []string
+	engine := DockerEngine{
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests = append(requests, req.Method+" "+req.URL.RequestURI())
+				switch len(requests) {
+				case 1:
+					return dockerResponseBody(http.StatusOK, `{"Id":"id","Name":"/robot1","State":{"Running":true},"Config":{"Image":"img"}}`), nil
+				case 2:
+					return dockerResponseBody(http.StatusInternalServerError, "stop failed"), nil
+				default:
+					t.Fatalf("unexpected request %v", req)
+					return nil, nil
+				}
+			}),
+		},
+	}
+
+	err := engine.Start(context.Background(), ContainerSpec{Name: "robot1"})
+	if err == nil || !strings.Contains(err.Error(), "stop failed") {
+		t.Fatalf("error=%v", err)
+	}
+	want := []string{
+		"GET /containers/robot1/json",
+		"POST /containers/robot1/stop?t=20",
 	}
 	if len(requests) != len(want) {
 		t.Fatalf("requests=%v, want %v", requests, want)
