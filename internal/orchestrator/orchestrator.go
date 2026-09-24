@@ -1,10 +1,14 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -111,6 +115,7 @@ type VehiclePort interface {
 	Start(ctx context.Context) error
 	Status(ctx context.Context) (AppStatus, error)
 	Stop(ctx context.Context) error
+	SeedMap(ctx context.Context, archive []byte) error
 }
 
 type VehiclePortFactory interface {
@@ -123,6 +128,20 @@ type Orchestrator struct {
 	World          WorldPort
 	VehicleFactory VehiclePortFactory
 	Sleep          func(context.Context, time.Duration) error
+	assetsDir      string
+}
+
+const defaultAssetsDir = "deploy/assets"
+
+func (o Orchestrator) assetsPath() string {
+	if o.assetsDir != "" {
+		return o.assetsDir
+	}
+	return defaultAssetsDir
+}
+
+func (o Orchestrator) worldMapExportPath(world string) string {
+	return filepath.Join(o.assetsPath(), "worlds", world+".map_export")
 }
 
 func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Status, error) {
@@ -164,6 +183,9 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		if err := vehiclePort.Start(ctx); err != nil {
 			return Status{}, errors.Join(err, rollback())
 		}
+	}
+	if err := o.seedWorldMap(ctx, session.World, vehiclePorts); err != nil {
+		return Status{}, errors.Join(err, rollback())
 	}
 	status, err := statusFromPorts(ctx, worldPort, vehiclePorts)
 	if err != nil {
@@ -465,6 +487,94 @@ func (v EasyGoVehicle) containerName() string {
 		return v.ContainerName
 	}
 	return contract.AppContainer(v.Robot.Name)
+}
+
+// SeedMap imports a world map archive into the vehicle's easygo-app.  It retries
+// until the app HTTP API becomes reachable.
+func (v EasyGoVehicle) SeedMap(ctx context.Context, archive []byte) error {
+	runtime := easyGoRuntimeFor(v.Robot.Index)
+	importURL := fmt.Sprintf("http://127.0.0.1:%d/api/v6/map/import", runtime.apiPort)
+
+	// Wait for the app to be ready.
+	if err := waitAppReady(ctx, importURL); err != nil {
+		return fmt.Errorf("seed map %s: %w", v.Robot.Name, err)
+	}
+
+	body := new(bytes.Buffer)
+	mp := multipart.NewWriter(body)
+	part, err := mp.CreateFormFile("file", "world.map_export")
+	if err != nil {
+		return fmt.Errorf("seed map %s: build multipart: %w", v.Robot.Name, err)
+	}
+	if _, err := part.Write(archive); err != nil {
+		return fmt.Errorf("seed map %s: write body: %w", v.Robot.Name, err)
+	}
+	mp.Close()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, importURL, body)
+	if err != nil {
+		return fmt.Errorf("seed map %s: %w", v.Robot.Name, err)
+	}
+	req.Header.Set("Content-Type", mp.FormDataContentType())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("seed map %s: %w", v.Robot.Name, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 && !mapAlreadyExists(respBody) {
+		return fmt.Errorf("seed map %s: %s (%s)", v.Robot.Name, resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+// seedWorldMap reads the world's optional map export file and distributes it to
+// every vehicle.
+func (o Orchestrator) seedWorldMap(ctx context.Context, world string, vehicles []VehiclePort) error {
+	path := o.worldMapExportPath(world)
+	archive, err := os.ReadFile(path)
+	if err != nil {
+		// No map for this world — not an error.
+		return nil
+	}
+	for _, vp := range vehicles {
+		if err := vp.SeedMap(ctx, archive); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func waitAppReady(ctx context.Context, importURL string) error {
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("app not ready after 3m")
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, importURL[:len(importURL)-len("/map/import")]+"/map", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < 300 {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// mapAlreadyExists reports whether body is a "map already exists" error
+// (error_code 912004) from the easygo-app map import endpoint.
+func mapAlreadyExists(body []byte) bool {
+	return strings.Contains(string(body), `error_code":912004`)
 }
 
 func withDefaults(cfg contract.StartConfig) contract.StartConfig {

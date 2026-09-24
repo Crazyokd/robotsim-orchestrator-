@@ -126,6 +126,8 @@ func (f *fakeVehiclePort) Stop(context.Context) error {
 	return nil
 }
 
+func (f *fakeVehiclePort) SeedMap(context.Context, []byte) error { return nil }
+
 type fakeVehicleFactory struct {
 	ports       []*fakeVehiclePort
 	failRobot   string
