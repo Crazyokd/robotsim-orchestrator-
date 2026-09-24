@@ -20,7 +20,8 @@ lint:
       - .cache/go-mod/
   script:
     - test -z "$(gofmt -l cmd internal)"
-    - go test ./...
+    - go vet ./...
+    - go test -race ./...
     - go build -o /tmp/simenv ./cmd/simenv
     - go build -o /tmp/simenv-world ./cmd/simenv-world
 

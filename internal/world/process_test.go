@@ -18,6 +18,7 @@ type fakeTransport struct {
 	startedContext context.Context
 	clock          bool
 	created        []string
+	createdPaths   []string
 	server         chan error
 	waitClock      func(ctx context.Context) error
 	createErr      error
@@ -40,11 +41,12 @@ func (f *fakeTransport) WaitClock(ctx context.Context) error {
 	return nil
 }
 
-func (f *fakeTransport) CreateEntity(_ context.Context, _, name, _ string, _ contract.Pose) error {
+func (f *fakeTransport) CreateEntity(_ context.Context, _, name, sdfPath string, _ contract.Pose) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
 	f.created = append(f.created, name)
+	f.createdPaths = append(f.createdPaths, sdfPath)
 	return nil
 }
 
@@ -70,6 +72,7 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	worldsRoot, modelPath, readyPath := fixture(t)
 	transport := &fakeTransport{}
 	ctx, cancel := context.WithCancel(context.Background())
+	readyRaw := make(chan []byte, 1)
 	proc := Process{
 		AssetsRoot: worldsRoot,
 		ModelPath:  modelPath,
@@ -81,6 +84,14 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	// Cancel as soon as the ready file appears; Run blocks until ctx is done.
 	go func() {
 		waitFile(t, readyPath, 5*time.Second)
+		raw, err := os.ReadFile(readyPath)
+		if err != nil {
+			t.Error(err)
+			readyRaw <- nil
+			cancel()
+			return
+		}
+		readyRaw <- raw
 		cancel()
 	}()
 	if err := proc.Run(ctx); err != nil {
@@ -92,9 +103,15 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	if len(transport.created) != 1 || transport.created[0] != "robot1" {
 		t.Fatalf("created=%v", transport.created)
 	}
-	raw, err := os.ReadFile(readyPath)
-	if err != nil {
-		t.Fatal(err)
+	if len(transport.createdPaths) != 1 {
+		t.Fatalf("created paths=%v", transport.createdPaths)
+	}
+	if _, err := os.Stat(transport.createdPaths[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary SDF still exists: %v", err)
+	}
+	raw := <-readyRaw
+	if raw == nil {
+		t.Fatal("ready report was not captured")
 	}
 	var report ReadyReport
 	if err := json.Unmarshal(raw, &report); err != nil {
@@ -102,6 +119,9 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	}
 	if !report.Clock || report.World != "map_world" || len(report.Robots) != 1 {
 		t.Fatalf("report=%+v", report)
+	}
+	if _, err := os.Stat(readyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ready file still exists: %v", err)
 	}
 }
 
@@ -161,6 +181,9 @@ func TestProcessExitsWhenServerDiesAfterReady(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "segfault") {
 		t.Fatalf("expected server-death error, got: %v", err)
 	}
+	if _, statErr := os.Stat(readyPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("ready file still exists: %v", statErr)
+	}
 }
 
 func TestProcessStopsCleanlyWhenCancelled(t *testing.T) {
@@ -181,6 +204,9 @@ func TestProcessStopsCleanlyWhenCancelled(t *testing.T) {
 	}()
 	if err := proc.Run(ctx); err != nil {
 		t.Fatalf("expected clean exit, got: %v", err)
+	}
+	if _, err := os.Stat(readyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ready file still exists: %v", err)
 	}
 }
 

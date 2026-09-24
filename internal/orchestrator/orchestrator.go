@@ -70,10 +70,11 @@ type Engine interface {
 }
 
 type AppStatus struct {
-	Name    string
-	Running bool
-	APIPort int
-	Image   string
+	Name      string
+	RobotName string
+	Running   bool
+	APIPort   int
+	Image     string
 }
 
 type Status struct {
@@ -213,8 +214,31 @@ func statusFromPorts(ctx context.Context, worldPort WorldPort, vehiclePorts []Ve
 		Ready:     ready,
 		EnvImage:  worldInfo.Image,
 		AppImage:  appImage,
-		Connected: worldInfo.Running && ready.Clock && len(ready.Robots) > 0,
+		Connected: sessionConnected(worldInfo, ready, apps),
 	}, nil
+}
+
+func sessionConnected(worldInfo ContainerInfo, ready world.ReadyReport, apps []AppStatus) bool {
+	if !worldInfo.Running || !ready.Clock || len(ready.Robots) == 0 || len(apps) != len(ready.Robots) {
+		return false
+	}
+	expected := make(map[string]struct{}, len(ready.Robots))
+	for _, name := range ready.Robots {
+		expected[name] = struct{}{}
+	}
+	if len(expected) != len(ready.Robots) {
+		return false
+	}
+	for _, app := range apps {
+		if !app.Running {
+			return false
+		}
+		if _, ok := expected[app.RobotName]; !ok {
+			return false
+		}
+		delete(expected, app.RobotName)
+	}
+	return len(expected) == 0
 }
 
 func (o Orchestrator) worldPort(cfg contract.StartConfig) WorldPort {
@@ -287,10 +311,19 @@ func (w DockerWorld) Ready(ctx context.Context, session contract.Session) (world
 
 func (w DockerWorld) Status(ctx context.Context) (ContainerInfo, world.ReadyReport, error) {
 	worldInfo, err := w.Engine.Inspect(ctx, contract.WorldContainer)
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	if errors.Is(err, ErrNotFound) {
+		return ContainerInfo{}, world.ReadyReport{}, nil
+	}
+	if err != nil {
 		return ContainerInfo{}, world.ReadyReport{}, err
 	}
-	ready, _ := readReady(ctx, w.Engine)
+	if !worldInfo.Running {
+		return worldInfo, world.ReadyReport{}, nil
+	}
+	ready, err := readReady(ctx, w.Engine)
+	if err != nil {
+		return worldInfo, world.ReadyReport{}, fmt.Errorf("read world readiness: %w", err)
+	}
 	return worldInfo, ready, nil
 }
 
@@ -413,10 +446,11 @@ func (v EasyGoVehicle) Status(ctx context.Context) (AppStatus, error) {
 		return AppStatus{}, err
 	}
 	return AppStatus{
-		Name:    info.Name,
-		Running: info.Running,
-		APIPort: easyGoRuntimeFor(v.Robot.Index).apiPort,
-		Image:   info.Image,
+		Name:      info.Name,
+		RobotName: v.Robot.Name,
+		Running:   info.Running,
+		APIPort:   easyGoRuntimeFor(v.Robot.Index).apiPort,
+		Image:     info.Image,
 	}, nil
 }
 

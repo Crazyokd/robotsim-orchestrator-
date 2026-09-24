@@ -187,3 +187,71 @@ func TestStartConfigViewerQueries(t *testing.T) {
 		t.Fatal("WantsGzGui mismatch")
 	}
 }
+
+func TestSessionRejectsDuplicateRobotIdentity(t *testing.T) {
+	base := Session{
+		World:     "simple",
+		Partition: DefaultPartition,
+		Robots: []Robot{
+			{Index: 1, Name: "robot1", TopicPrefix: "robot1"},
+			{Index: 2, Name: "robot2", TopicPrefix: "robot2"},
+		},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Session)
+	}{
+		{"index", func(s *Session) { s.Robots[1].Index = s.Robots[0].Index }},
+		{"name", func(s *Session) { s.Robots[1].Name = s.Robots[0].Name }},
+		{"topic prefix", func(s *Session) { s.Robots[1].TopicPrefix = s.Robots[0].TopicPrefix }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session := base
+			session.Robots = append([]Robot(nil), base.Robots...)
+			test.mutate(&session)
+			if err := session.Validate(); err == nil {
+				t.Fatalf("expected duplicate %s to fail", test.name)
+			}
+		})
+	}
+}
+
+func TestSessionRejectsUnsafeNames(t *testing.T) {
+	base := Session{
+		World:     "simple",
+		Partition: DefaultPartition,
+		Robots:    []Robot{{Index: 1, Name: "robot1", TopicPrefix: "robot1"}},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Session)
+	}{
+		{"world path", func(s *Session) { s.World = "../simple" }},
+		{"robot path", func(s *Session) { s.Robots[0].Name = "../robot1" }},
+		{"robot quote", func(s *Session) { s.Robots[0].Name = `robot"1` }},
+		{"topic whitespace", func(s *Session) { s.Robots[0].TopicPrefix = "fleet/robot 1" }},
+		{"topic empty segment", func(s *Session) { s.Robots[0].TopicPrefix = "fleet//robot1" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session := base
+			session.Robots = append([]Robot(nil), base.Robots...)
+			test.mutate(&session)
+			if err := session.Validate(); err == nil {
+				t.Fatalf("expected unsafe %s to fail", test.name)
+			}
+		})
+	}
+}
+
+func TestSessionAcceptsNestedTopicPrefix(t *testing.T) {
+	session := Session{
+		World:     "simple",
+		Partition: DefaultPartition,
+		Robots:    []Robot{{Index: 1, Name: "robot1", TopicPrefix: "fleet/robot1"}},
+	}
+	if err := session.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

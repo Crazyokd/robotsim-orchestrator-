@@ -18,6 +18,7 @@ type fakeEngine struct {
 	stopped []string
 	infos   map[string]ContainerInfo
 	ready   string
+	execErr error
 }
 
 func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {
@@ -50,6 +51,9 @@ func (f *fakeEngine) Inspect(_ context.Context, name string) (ContainerInfo, err
 
 func (f *fakeEngine) Exec(_ context.Context, name string, cmd []string) (string, error) {
 	if name == contract.WorldContainer && strings.Contains(strings.Join(cmd, " "), contract.WorldReadyPath) {
+		if f.execErr != nil {
+			return "", f.execErr
+		}
 		return f.ready, nil
 	}
 	return "", nil
@@ -125,10 +129,11 @@ func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot)
 		session: session,
 		robot:   robot,
 		status: AppStatus{
-			Name:    contract.AppContainer(robot.Name),
-			Running: true,
-			APIPort: easyGoRuntimeFor(robot.Index).apiPort,
-			Image:   "runtime",
+			Name:      contract.AppContainer(robot.Name),
+			RobotName: robot.Name,
+			Running:   true,
+			APIPort:   easyGoRuntimeFor(robot.Index).apiPort,
+			Image:     "runtime",
 		},
 		stopOrder: &f.stopOrder,
 	}
@@ -293,6 +298,65 @@ func TestStatusAggregatesIndependentVehiclePorts(t *testing.T) {
 	}
 	if status.Apps[0].Name == status.Apps[1].Name {
 		t.Fatalf("apps=%+v", status.Apps)
+	}
+	if status.Connected {
+		t.Fatalf("stopped vehicle must disconnect the session: %+v", status)
+	}
+}
+
+func TestStatusRequiresTheReadyRobotSet(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]ContainerInfo{
+		contract.WorldContainer: {Name: contract.WorldContainer, Running: true, Image: "env"},
+		"simenv-robot1": {
+			Name: "simenv-robot1", Running: true, Image: "runtime-1",
+			Labels: appLabels("robot1", 1),
+		},
+		"simenv-robot3": {
+			Name: "simenv-robot3", Running: true, Image: "runtime-3",
+			Labels: appLabels("robot3", 3),
+		},
+	}}
+	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}})
+	engine.ready = string(report)
+
+	status, err := (Orchestrator{Engine: engine}).Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Connected {
+		t.Fatalf("unexpected connected status: %+v", status)
+	}
+}
+
+func TestDockerWorldStatusReturnsReadyErrorForRunningWorld(t *testing.T) {
+	readyErr := errors.New("ready read failed")
+	engine := &fakeEngine{
+		infos: map[string]ContainerInfo{
+			contract.WorldContainer: {Name: contract.WorldContainer, Running: true},
+		},
+		execErr: readyErr,
+	}
+
+	_, _, err := (DockerWorld{Engine: engine}).Status(context.Background())
+	if !errors.Is(err, readyErr) {
+		t.Fatalf("error=%v, want %v", err, readyErr)
+	}
+}
+
+func TestDockerWorldStatusIgnoresStaleReadyWhenWorldIsStopped(t *testing.T) {
+	engine := &fakeEngine{
+		infos: map[string]ContainerInfo{
+			contract.WorldContainer: {Name: contract.WorldContainer, Running: false},
+		},
+		execErr: errors.New("ready file should not be read"),
+	}
+
+	_, ready, err := (DockerWorld{Engine: engine}).Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.Clock || len(ready.Robots) != 0 {
+		t.Fatalf("ready=%+v", ready)
 	}
 }
 

@@ -49,6 +49,12 @@ func (p Process) Run(ctx context.Context) error {
 	if strings.TrimSpace(p.WorldName) == "" {
 		return fmt.Errorf("world name must not be empty")
 	}
+	if err := removeReady(p.ReadyPath); err != nil {
+		return err
+	}
+	defer func() {
+		_ = removeReady(p.ReadyPath)
+	}()
 	worldPath := filepath.Join(p.AssetsRoot, p.WorldName+".sdf")
 	raw, err := os.ReadFile(worldPath)
 	if err != nil {
@@ -77,19 +83,7 @@ func (p Process) Run(ctx context.Context) error {
 	}
 	names := make([]string, 0, len(p.Bodies))
 	for _, body := range p.Bodies {
-		sdf, err := os.ReadFile(p.ModelPath)
-		if err != nil {
-			return fmt.Errorf("read model: %w", err)
-		}
-		rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.TopicPrefix, body.Pose.Yaw, body.KeepCameras)
-		if err != nil {
-			return err
-		}
-		sdfPath := filepath.Join(os.TempDir(), body.Name+".sdf")
-		if err := os.WriteFile(sdfPath, []byte(rewritten), 0o644); err != nil {
-			return err
-		}
-		if err := p.Transport.CreateEntity(ctx, worldSDFName, body.Name, sdfPath, body.Pose); err != nil {
+		if err := createEntity(ctx, p.Transport, p.ModelPath, worldSDFName, body); err != nil {
 			return causeOr(ctx, err)
 		}
 		names = append(names, body.Name)
@@ -129,7 +123,65 @@ func writeReady(path string, report ReadyReport) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o644)
+	file, err := os.CreateTemp(filepath.Dir(path), ".ready-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := file.Name()
+	defer func() {
+		_ = file.Close()
+		_ = os.Remove(tempPath)
+	}()
+	if err := file.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := file.Write(raw); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
+}
+
+func createEntity(ctx context.Context, transport Transport, modelPath, worldName string, body Body) error {
+	sdf, err := os.ReadFile(modelPath)
+	if err != nil {
+		return fmt.Errorf("read model: %w", err)
+	}
+	rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.TopicPrefix, body.Pose.Yaw, body.KeepCameras)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp("", "simenv-*.sdf")
+	if err != nil {
+		return err
+	}
+	sdfPath := file.Name()
+	defer func() {
+		_ = file.Close()
+		_ = os.Remove(sdfPath)
+	}()
+	if err := file.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte(rewritten)); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return transport.CreateEntity(ctx, worldName, body.Name, sdfPath, body.Pose)
+}
+
+func removeReady(path string) error {
+	if path == "" {
+		return fmt.Errorf("ready path must not be empty")
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove ready file: %w", err)
+	}
+	return nil
 }
 
 func sdfWorldName(raw []byte) (string, error) {

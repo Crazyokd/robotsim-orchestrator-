@@ -188,24 +188,80 @@ func (s Session) Validate() error {
 	if strings.TrimSpace(s.World) == "" {
 		return fmt.Errorf("session world must not be empty")
 	}
+	if err := validateSafeToken("session world", s.World); err != nil {
+		return err
+	}
 	if strings.TrimSpace(s.Partition) == "" {
 		return fmt.Errorf("session partition must not be empty")
+	}
+	if err := validateSafeToken("session partition", s.Partition); err != nil {
+		return err
 	}
 	if len(s.Robots) < 1 {
 		return fmt.Errorf("session robots must not be empty")
 	}
+	indices := make(map[int]struct{}, len(s.Robots))
+	names := make(map[string]struct{}, len(s.Robots))
+	topicPrefixes := make(map[string]struct{}, len(s.Robots))
 	for _, robot := range s.Robots {
 		if robot.Index < 1 {
 			return fmt.Errorf("robot index must be >= 1")
 		}
-		if strings.TrimSpace(robot.Name) == "" {
-			return fmt.Errorf("robot name must not be empty")
+		if _, ok := indices[robot.Index]; ok {
+			return fmt.Errorf("duplicate robot index %d", robot.Index)
 		}
-		if strings.TrimSpace(robot.TopicPrefix) == "" {
-			return fmt.Errorf("robot topic prefix must not be empty")
+		indices[robot.Index] = struct{}{}
+		if err := validateSafeToken("robot name", robot.Name); err != nil {
+			return err
+		}
+		if _, ok := names[robot.Name]; ok {
+			return fmt.Errorf("duplicate robot name %q", robot.Name)
+		}
+		names[robot.Name] = struct{}{}
+		if err := validateTopicPrefix(robot.TopicPrefix); err != nil {
+			return err
+		}
+		if _, ok := topicPrefixes[robot.TopicPrefix]; ok {
+			return fmt.Errorf("duplicate robot topic prefix %q", robot.TopicPrefix)
+		}
+		topicPrefixes[robot.TopicPrefix] = struct{}{}
+	}
+	return nil
+}
+
+func validateSafeToken(field, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	for _, r := range value {
+		if isSafeTokenChar(r) {
+			continue
+		}
+		return fmt.Errorf("%s contains invalid character %q", field, r)
+	}
+	return nil
+}
+
+func validateTopicPrefix(value string) error {
+	if value == "" {
+		return fmt.Errorf("robot topic prefix must not be empty")
+	}
+	if strings.TrimSpace(value) != value || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") {
+		return fmt.Errorf("robot topic prefix %q is not canonical", value)
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if err := validateSafeToken("robot topic prefix", segment); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func isSafeTokenChar(r rune) bool {
+	return r == '_' || r == '-' ||
+		(r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9')
 }
 
 func AppContainer(name string) string {
