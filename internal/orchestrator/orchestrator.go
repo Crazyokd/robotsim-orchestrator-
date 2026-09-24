@@ -101,7 +101,7 @@ type easyGoRuntime struct {
 
 type WorldPort interface {
 	Start(ctx context.Context, session contract.Session) error
-	Ready(ctx context.Context) (world.ReadyReport, error)
+	Ready(ctx context.Context, session contract.Session) (world.ReadyReport, error)
 	Status(ctx context.Context) (ContainerInfo, world.ReadyReport, error)
 	Stop(ctx context.Context) error
 }
@@ -155,7 +155,7 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if err := worldPort.Start(ctx, session); err != nil {
 		return Status{}, errors.Join(err, rollback())
 	}
-	if _, err := worldPort.Ready(ctx); err != nil {
+	if _, err := worldPort.Ready(ctx, session); err != nil {
 		return Status{}, errors.Join(err, rollback())
 	}
 	for _, robot := range session.Robots {
@@ -278,8 +278,11 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session) error 
 	})
 }
 
-func (w DockerWorld) Ready(ctx context.Context) (world.ReadyReport, error) {
-	return waitReady(ctx, w.Engine, w.Sleep)
+func (w DockerWorld) Ready(ctx context.Context, session contract.Session) (world.ReadyReport, error) {
+	if err := session.Validate(); err != nil {
+		return world.ReadyReport{}, err
+	}
+	return waitReady(ctx, w.Engine, w.Sleep, session)
 }
 
 func (w DockerWorld) Status(ctx context.Context) (ContainerInfo, world.ReadyReport, error) {
@@ -301,11 +304,16 @@ type EasyGoVehicleFactory struct {
 }
 
 func (f EasyGoVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
+	return f.newVehicle(session, robot, contract.AppContainer(robot.Name))
+}
+
+func (f EasyGoVehicleFactory) newVehicle(session contract.Session, robot contract.Robot, containerName string) VehiclePort {
 	return EasyGoVehicle{
-		Engine:  f.Engine,
-		Config:  f.Config,
-		Session: session,
-		Robot:   robot,
+		Engine:        f.Engine,
+		Config:        f.Config,
+		Session:       session,
+		Robot:         robot,
+		ContainerName: containerName,
 	}
 }
 
@@ -323,7 +331,7 @@ func (f EasyGoVehicleFactory) Discover(ctx context.Context) ([]VehiclePort, erro
 		if !ok {
 			continue
 		}
-		ports = append(ports, f.New(contract.Session{}, robot))
+		ports = append(ports, f.newVehicle(contract.Session{}, robot, info.Name))
 	}
 	return ports, nil
 }
@@ -343,10 +351,11 @@ func robotFromLabels(labels map[string]string) (contract.Robot, bool) {
 }
 
 type EasyGoVehicle struct {
-	Engine  Engine
-	Config  contract.StartConfig
-	Session contract.Session
-	Robot   contract.Robot
+	Engine        Engine
+	Config        contract.StartConfig
+	Session       contract.Session
+	Robot         contract.Robot
+	ContainerName string
 }
 
 func (v EasyGoVehicle) Start(ctx context.Context) error {
@@ -399,7 +408,7 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 }
 
 func (v EasyGoVehicle) Status(ctx context.Context) (AppStatus, error) {
-	info, err := v.Engine.Inspect(ctx, contract.AppContainer(v.Robot.Name))
+	info, err := v.Engine.Inspect(ctx, v.containerName())
 	if err != nil {
 		return AppStatus{}, err
 	}
@@ -412,7 +421,14 @@ func (v EasyGoVehicle) Status(ctx context.Context) (AppStatus, error) {
 }
 
 func (v EasyGoVehicle) Stop(ctx context.Context) error {
-	return v.Engine.Stop(ctx, contract.AppContainer(v.Robot.Name))
+	return v.Engine.Stop(ctx, v.containerName())
+}
+
+func (v EasyGoVehicle) containerName() string {
+	if v.ContainerName != "" {
+		return v.ContainerName
+	}
+	return contract.AppContainer(v.Robot.Name)
 }
 
 func withDefaults(cfg contract.StartConfig) contract.StartConfig {
@@ -431,7 +447,7 @@ func withDefaults(cfg contract.StartConfig) contract.StartConfig {
 	return cfg
 }
 
-func waitReady(ctx context.Context, engine Engine, sleep func(context.Context, time.Duration) error) (world.ReadyReport, error) {
+func waitReady(ctx context.Context, engine Engine, sleep func(context.Context, time.Duration) error, session contract.Session) (world.ReadyReport, error) {
 	if sleep == nil {
 		sleep = func(ctx context.Context, d time.Duration) error {
 			t := time.NewTimer(d)
@@ -447,7 +463,7 @@ func waitReady(ctx context.Context, engine Engine, sleep func(context.Context, t
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		report, err := readReady(ctx, engine)
-		if err == nil && report.Clock && len(report.Robots) > 0 {
+		if err == nil && readyReportMatches(report, session) {
 			return report, nil
 		}
 		if time.Now().After(deadline) {
@@ -460,6 +476,26 @@ func waitReady(ctx context.Context, engine Engine, sleep func(context.Context, t
 			return world.ReadyReport{}, err
 		}
 	}
+}
+
+func readyReportMatches(report world.ReadyReport, session contract.Session) bool {
+	if !report.Clock || len(report.Robots) != len(session.Robots) {
+		return false
+	}
+	expected := make(map[string]struct{}, len(session.Robots))
+	for _, robot := range session.Robots {
+		expected[robot.Name] = struct{}{}
+	}
+	if len(expected) != len(session.Robots) {
+		return false
+	}
+	for _, name := range report.Robots {
+		if _, ok := expected[name]; !ok {
+			return false
+		}
+		delete(expected, name)
+	}
+	return len(expected) == 0
 }
 
 func readReady(ctx context.Context, engine Engine) (world.ReadyReport, error) {

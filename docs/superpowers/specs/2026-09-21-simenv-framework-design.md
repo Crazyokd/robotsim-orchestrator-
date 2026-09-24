@@ -38,7 +38,7 @@ stop:   ∀ a port(a).Stop → World.Stop
 ```go
 type WorldPort interface {
     Start(ctx context.Context, sess *Session) error
-    Ready(ctx context.Context) error
+    Ready(ctx context.Context, sess *Session) error
     Status(ctx context.Context) (WorldStatus, error)
     Stop(ctx context.Context) error
 }

@@ -14,15 +14,18 @@ import (
 )
 
 type fakeTransport struct {
-	started   string
-	clock     bool
-	created   []string
-	server    chan error
-	waitClock func(ctx context.Context) error
+	started        string
+	startedContext context.Context
+	clock          bool
+	created        []string
+	server         chan error
+	waitClock      func(ctx context.Context) error
+	createErr      error
 }
 
-func (f *fakeTransport) StartSim(_ context.Context, worldPath string) (<-chan error, error) {
+func (f *fakeTransport) StartSim(ctx context.Context, worldPath string) (<-chan error, error) {
 	f.started = worldPath
+	f.startedContext = ctx
 	if f.server == nil {
 		f.server = make(chan error, 1)
 	}
@@ -38,6 +41,9 @@ func (f *fakeTransport) WaitClock(ctx context.Context) error {
 }
 
 func (f *fakeTransport) CreateEntity(_ context.Context, _, name, _ string, _ contract.Pose) error {
+	if f.createErr != nil {
+		return f.createErr
+	}
 	f.created = append(f.created, name)
 	return nil
 }
@@ -175,6 +181,29 @@ func TestProcessStopsCleanlyWhenCancelled(t *testing.T) {
 	}()
 	if err := proc.Run(ctx); err != nil {
 		t.Fatalf("expected clean exit, got: %v", err)
+	}
+}
+
+func TestProcessCancelsSimulationWhenEntityCreationFails(t *testing.T) {
+	worldsRoot, modelPath, readyPath := fixture(t)
+	transport := &fakeTransport{createErr: errors.New("spawn failed")}
+	proc := Process{
+		AssetsRoot: worldsRoot,
+		ModelPath:  modelPath,
+		ReadyPath:  readyPath,
+		Transport:  transport,
+		WorldName:  "simple",
+		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
+	}
+	err := proc.Run(context.Background())
+	close(transport.server)
+	if err == nil || !strings.Contains(err.Error(), "spawn failed") {
+		t.Fatalf("expected spawn error, got: %v", err)
+	}
+	select {
+	case <-transport.startedContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("simulation context was not cancelled")
 	}
 }
 

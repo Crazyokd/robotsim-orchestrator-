@@ -58,12 +58,12 @@ func (p Process) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	server, err := p.Transport.StartSim(ctx, worldPath)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
 	go func() {
 		if err := <-server; err != nil {
 			cancel(err)

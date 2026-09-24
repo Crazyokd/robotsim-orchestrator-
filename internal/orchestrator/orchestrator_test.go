@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/world"
@@ -72,7 +73,7 @@ func (f *fakeWorldPort) Start(_ context.Context, session contract.Session) error
 	return nil
 }
 
-func (f *fakeWorldPort) Ready(context.Context) (world.ReadyReport, error) {
+func (f *fakeWorldPort) Ready(context.Context, contract.Session) (world.ReadyReport, error) {
 	return world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}}, nil
 }
 
@@ -243,6 +244,27 @@ func TestStartWorldThenApp(t *testing.T) {
 	}
 	if appSpec.Env["GZ_PARTITION"] != "easygo_sim" || appSpec.Env["ROS_DOMAIN_ID"] != "11" || appSpec.Env["BACKEND_PORT"] != "18191" {
 		t.Fatalf("app env=%v", appSpec.Env)
+	}
+}
+
+func TestWaitReadyRequiresAllSessionRobots(t *testing.T) {
+	report, _ := json.Marshal(world.ReadyReport{
+		World: "map_world", Clock: true, Robots: []string{"robot1"},
+	})
+	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
+	session := contract.Session{
+		World:     "simple",
+		Partition: contract.DefaultPartition,
+		Robots: []contract.Robot{
+			{Index: 1, Name: "robot1", TopicPrefix: "robot1"},
+			{Index: 2, Name: "robot2", TopicPrefix: "robot2"},
+		},
+	}
+	_, err := waitReady(context.Background(), engine, func(context.Context, time.Duration) error {
+		return errors.New("retry")
+	}, session)
+	if err == nil || !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -465,6 +487,37 @@ func TestEasyGoVehicleFactoryDiscoversOnlyRobotContainers(t *testing.T) {
 	}
 	if !names["robot1"] || !names["robot2"] {
 		t.Fatalf("robots=%v", names)
+	}
+}
+
+func TestDiscoveredVehicleUsesActualContainerName(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]ContainerInfo{
+		"legacy-app-name": {
+			Name: "legacy-app-name", Running: true, Image: "runtime",
+			Labels: appLabels("robot1", 1),
+		},
+	}}
+	factory := EasyGoVehicleFactory{Engine: engine}
+
+	ports, err := factory.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 1 {
+		t.Fatalf("ports=%d", len(ports))
+	}
+	status, err := ports[0].Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Name != "legacy-app-name" {
+		t.Fatalf("status=%+v", status)
+	}
+	if err := ports[0].Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(engine.stopped) != 1 || engine.stopped[0] != "legacy-app-name" {
+		t.Fatalf("stopped=%v", engine.stopped)
 	}
 }
 
