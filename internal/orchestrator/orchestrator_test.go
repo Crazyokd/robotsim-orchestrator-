@@ -1,6 +1,9 @@
 package orchestrator
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -151,14 +154,16 @@ func (f *fakeWorldPort) Stop(context.Context) error {
 }
 
 type fakeVehiclePort struct {
-	session   contract.Session
-	robot     contract.Robot
-	status    AppStatus
-	started   bool
-	stopped   bool
-	startErr  error
-	readyErr  error
-	stopOrder *[]string
+	session     contract.Session
+	robot       contract.Robot
+	status      AppStatus
+	started     bool
+	stopped     bool
+	startErr    error
+	readyErr    error
+	localizeErr error
+	localized   string
+	stopOrder   *[]string
 }
 
 func (f *fakeVehiclePort) Start(context.Context) error {
@@ -180,12 +185,18 @@ func (f *fakeVehiclePort) Stop(context.Context) error {
 
 func (f *fakeVehiclePort) WaitReady(context.Context) error { return f.readyErr }
 
+func (f *fakeVehiclePort) Localize(_ context.Context, mapName string) error {
+	f.localized = mapName
+	return f.localizeErr
+}
+
 func (f *fakeVehiclePort) SeedMap(context.Context, []byte) error { return nil }
 
 type fakeVehicleFactory struct {
 	ports         []*fakeVehiclePort
 	failRobot     string
 	notReadyRobot string
+	localizeFails string
 	stopOrder     []string
 	discoverErr   error
 }
@@ -208,6 +219,9 @@ func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot)
 	}
 	if robot.Name == f.notReadyRobot {
 		port.readyErr = errors.New("app API never answered")
+	}
+	if robot.Name == f.localizeFails {
+		port.localizeErr = errors.New("localization refused")
 	}
 	f.ports = append(f.ports, port)
 	return port
@@ -907,4 +921,132 @@ func TestStartEnablesMultiAMRPeerLink(t *testing.T) {
 	if app.Env["EASYGO_BLUETOOTH_UDP_PORT"] != strconv.Itoa(multiAMRPeerPort) {
 		t.Fatalf("peer link port=%q", app.Env["EASYGO_BLUETOOTH_UDP_PORT"])
 	}
+}
+
+func mapExportArchive(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, content := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestWorldMapNameResolvesPrimaryLayer(t *testing.T) {
+	archive := mapExportArchive(t, map[string]string{
+		"sros/map/arena_world0.pgm":  "pgm",
+		"sros/map/arena_world1.pgm":  "pgm",
+		"sros/map/zone_2_0.pgm":      "sublayer",
+		"sros/map/arena_world.json":  "{}",
+		"sros/map/arena_world_1.png": "png",
+	})
+	name, err := worldMapName(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "arena_world" {
+		t.Fatalf("name=%q", name)
+	}
+}
+
+func TestWorldMapNameRejectsArchiveWithoutPrimaryLayer(t *testing.T) {
+	archive := mapExportArchive(t, map[string]string{"sros/map/thing.json": "{}"})
+	if _, err := worldMapName(archive); err == nil {
+		t.Fatal("expected an error for an archive without a primary layer")
+	}
+}
+
+func TestInitialPoseRequestConvertsToMillimetresAndMilliradians(t *testing.T) {
+	body, err := initialPoseRequest("arena_world", contract.Pose{X: 3, Y: -1.5, Yaw: 1.25})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["map_id"] != "arena_world" {
+		t.Fatalf("map_id=%v", got["map_id"])
+	}
+	if got["x"] != float64(3000) || got["y"] != float64(-1500) || got["theta"] != float64(1250) {
+		t.Fatalf("pose=%v", got)
+	}
+	if got["loctype"] != float64(2) {
+		t.Fatalf("loctype=%v", got["loctype"])
+	}
+}
+
+func TestStartPlacesEveryVehicleOnTheWorldMap(t *testing.T) {
+	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
+	worldPort := &fakeWorldPort{}
+	vehicleFactory := &fakeVehicleFactory{}
+	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: assetsWithWorldMap(t, archive)}
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 2, World: "simple", AppImage: "runtime", EnvImage: "env",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(vehicleFactory.ports) != 2 {
+		t.Fatalf("vehicles=%d", len(vehicleFactory.ports))
+	}
+	for _, port := range vehicleFactory.ports {
+		if port.localized != "arena_world" {
+			t.Fatalf("%s localized on %q", port.robot.Name, port.localized)
+		}
+	}
+}
+
+func TestStartRollsBackWhenLocalizationFails(t *testing.T) {
+	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
+	worldPort := &fakeWorldPort{}
+	vehicleFactory := &fakeVehicleFactory{localizeFails: "robot1"}
+	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: assetsWithWorldMap(t, archive)}
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
+	}); err == nil {
+		t.Fatal("expected start to fail when the vehicle cannot be placed on the map")
+	}
+	if !worldPort.stopped || !vehicleFactory.ports[0].stopped {
+		t.Fatalf("start did not roll back: %+v", vehicleFactory.ports)
+	}
+}
+
+func TestStartSkipsLocalizationWhenTheWorldShipsNoMap(t *testing.T) {
+	worldPort := &fakeWorldPort{}
+	vehicleFactory := &fakeVehicleFactory{}
+	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: t.TempDir()}
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if vehicleFactory.ports[0].localized != "" {
+		t.Fatal("vehicle localized without a world map")
+	}
+}
+
+// assetsWithWorldMap lays down the world map export for "simple".
+func assetsWithWorldMap(t *testing.T, archive []byte) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "worlds"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "worlds", "simple.map_export"), archive, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

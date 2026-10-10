@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +12,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -152,6 +156,8 @@ type VehiclePort interface {
 	Status(ctx context.Context) (AppStatus, error)
 	Stop(ctx context.Context) error
 	SeedMap(ctx context.Context, archive []byte) error
+	// Localize puts the vehicle on the map at the pose its world spawns it at.
+	Localize(ctx context.Context, mapName string) error
 }
 
 type VehiclePortFactory interface {
@@ -226,8 +232,16 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 			return Status{}, errors.Join(err, rollback())
 		}
 	}
-	if err := o.seedWorldMap(ctx, session.World, vehiclePorts); err != nil {
+	mapName, err := o.seedWorldMap(ctx, session.World, vehiclePorts)
+	if err != nil {
 		return Status{}, errors.Join(err, rollback())
+	}
+	if mapName != "" {
+		for _, vehiclePort := range vehiclePorts {
+			if err := vehiclePort.Localize(ctx, mapName); err != nil {
+				return Status{}, errors.Join(err, rollback())
+			}
+		}
 	}
 	status, err := statusFromPorts(ctx, worldPort, vehiclePorts)
 	if err != nil {
@@ -683,20 +697,133 @@ func (v EasyGoVehicle) SeedMap(ctx context.Context, archive []byte) error {
 }
 
 // seedWorldMap reads the world's optional map export file and distributes it to
-// every vehicle.
-func (o Orchestrator) seedWorldMap(ctx context.Context, world string, vehicles []VehiclePort) error {
-	path := o.worldMapExportPath(world)
-	archive, err := os.ReadFile(path)
+// every vehicle. It returns the map's name, or "" when the world ships no map.
+//
+// A world and its map are one: the map was surveyed in that world, so starting a
+// world is what makes its map available.
+func (o Orchestrator) seedWorldMap(ctx context.Context, world string, vehicles []VehiclePort) (string, error) {
+	archive, err := os.ReadFile(o.worldMapExportPath(world))
 	if err != nil {
 		// No map for this world — not an error.
-		return nil
+		return "", nil
+	}
+	mapName, err := worldMapName(archive)
+	if err != nil {
+		return "", err
 	}
 	for _, vp := range vehicles {
 		if err := vp.SeedMap(ctx, archive); err != nil {
-			return err
+			return "", err
 		}
 	}
+	return mapName, nil
+}
+
+// worldMapName reports the primary layer name inside a .map_export archive,
+// resolved the same way easygo-app does: among the `{name}0.pgm` entries, the
+// first name that is not a numbered sublayer.
+func worldMapName(archive []byte) (string, error) {
+	reader, err := mapArchiveReader(archive)
+	if err != nil {
+		return "", err
+	}
+	names := map[string]struct{}{}
+	entries := tar.NewReader(reader)
+	for {
+		header, err := entries.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("read map export: %w", err)
+		}
+		base := path.Base(header.Name)
+		stem, ok := strings.CutSuffix(base, "0.pgm")
+		if !ok || stem == "" {
+			continue
+		}
+		names[stem] = struct{}{}
+	}
+	if len(names) == 0 {
+		return "", errors.New("map export has no primary layer")
+	}
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		if isSublayerName(name) {
+			continue
+		}
+		ordered = append(ordered, name)
+	}
+	if len(ordered) == 0 {
+		return "", errors.New("map export has no primary layer")
+	}
+	sort.Strings(ordered)
+	return ordered[0], nil
+}
+
+// isSublayerName reports whether a layer name is a `_<digits>` sublayer.
+func isSublayerName(name string) bool {
+	_, suffix, ok := strings.Cut(name, "_")
+	if !ok {
+		return false
+	}
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func mapArchiveReader(archive []byte) (io.Reader, error) {
+	gzip, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return bytes.NewReader(archive), nil
+	}
+	return gzip, nil
+}
+
+// Localize puts this vehicle on the map, at the world pose the session spawned
+// it at. easygo-app takes millimetres and milliradians and drives the AGV
+// through the VDA5050 initPosition action; the manual mode only answers once the
+// localization node reports it is locating, so a returned error means the start
+// did not take.
+func (v EasyGoVehicle) Localize(ctx context.Context, mapName string) error {
+	body, err := initialPoseRequest(mapName, v.Robot.Pose)
+	if err != nil {
+		return fmt.Errorf("localize %s: %w", v.Robot.Name, err)
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v6/vehicle/localization/initial-pose", easyGoRuntimeFor(v.Robot.Index).apiPort)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("localize %s: %w", v.Robot.Name, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("localize %s: %w", v.Robot.Name, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("localize %s: %s (%s)", v.Robot.Name, resp.Status, strings.TrimSpace(string(respBody)))
+	}
 	return nil
+}
+
+// initialPoseRequest builds the app's initial-pose body. The world spawns the
+// robot in metres and radians; the app takes millimetres and milliradians.
+func initialPoseRequest(mapName string, pose contract.Pose) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"map_id":  mapName,
+		"x":       pose.X * 1000,
+		"y":       pose.Y * 1000,
+		"theta":   pose.Yaw * 1000,
+		"loctype": 2,
+	})
 }
 
 // WaitReady blocks until the vehicle's app answers on its API, so that a
