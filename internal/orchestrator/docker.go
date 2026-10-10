@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -81,6 +82,47 @@ func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 		return fmt.Errorf("start %s: %w", spec.Name, err)
 	}
 	return nil
+}
+
+// ReadImageFile reads one file out of an image. Docker exposes no image-file
+// API, so this creates a container that is never started, copies the file out
+// of it the way `docker cp` does, and removes it. Nothing runs.
+func (d DockerEngine) ReadImageFile(ctx context.Context, image, path string) ([]byte, error) {
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := d.json(ctx, http.MethodPost, "/containers/create", map[string]any{"Image": image}, &created); err != nil {
+		return nil, err
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = d.deleteContainer(cleanupCtx, created.ID)
+	}()
+	query := url.Values{}
+	query.Set("path", path)
+	raw, err := d.raw(ctx, http.MethodGet, "/containers/"+created.ID+"/archive?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	return firstArchiveFile(raw)
+}
+
+func firstArchiveFile(raw []byte) ([]byte, error) {
+	reader := tar.NewReader(bytes.NewReader(raw))
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("archive holds no regular file")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !header.FileInfo().Mode().IsRegular() {
+			continue
+		}
+		return io.ReadAll(reader)
+	}
 }
 
 func deviceMappings(devices []string) []map[string]string {

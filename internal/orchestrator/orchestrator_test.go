@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,15 +18,62 @@ import (
 )
 
 type fakeEngine struct {
-	started []ContainerSpec
-	stopped []string
-	infos   map[string]ContainerInfo
-	ready   string
-	execErr error
+	imageFiles map[string]string
+	started    []ContainerSpec
+	stopped    []string
+	infos      map[string]ContainerInfo
+	ready      string
+	execErr    error
 }
 
 type blockingReadyEngine struct {
 	fakeEngine
+}
+
+// fakeRegistry / fakeSyncRegistry mirror the shape of the registry files the app
+// image ships: main.vehicle_serial_no has no default_value, sync.membership_port
+// has one that collides across vehicles on a shared host network.
+const fakeRegistry = `items:
+  - key: main.vehicle_type
+    name: 车型
+    value_type: string
+
+  - key: main.vehicle_serial_no
+    name: 车辆序列号
+    value_type: string
+    is_coverable: 0
+
+  - key: main.nickname
+    name: 自定义名称
+    default_value: "EasyGo"
+    value_type: string
+`
+
+const fakeSyncRegistry = `items:
+  - key: sync.discovery_backend
+    default_value: cluster-gossip
+    value_type: enum
+
+  - key: sync.membership_port
+    name: 同步 membership 端口
+    default_value: 25354
+    value_type: int32
+`
+
+// ReadImageFile stands in for reading the image's registry files.
+func (f *fakeEngine) ReadImageFile(_ context.Context, _, path string) ([]byte, error) {
+	if f.imageFiles != nil {
+		if content, ok := f.imageFiles[path]; ok {
+			return []byte(content), nil
+		}
+	}
+	switch filepath.Base(path) {
+	case filepath.Base(vehicleSerialRegistry):
+		return []byte(fakeRegistry), nil
+	case filepath.Base(syncRegistry):
+		return []byte(fakeSyncRegistry), nil
+	}
+	return nil, fmt.Errorf("fake image has no %s", path)
 }
 
 func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {
@@ -106,6 +157,7 @@ type fakeVehiclePort struct {
 	started   bool
 	stopped   bool
 	startErr  error
+	readyErr  error
 	stopOrder *[]string
 }
 
@@ -126,13 +178,16 @@ func (f *fakeVehiclePort) Stop(context.Context) error {
 	return nil
 }
 
+func (f *fakeVehiclePort) WaitReady(context.Context) error { return f.readyErr }
+
 func (f *fakeVehiclePort) SeedMap(context.Context, []byte) error { return nil }
 
 type fakeVehicleFactory struct {
-	ports       []*fakeVehiclePort
-	failRobot   string
-	stopOrder   []string
-	discoverErr error
+	ports         []*fakeVehiclePort
+	failRobot     string
+	notReadyRobot string
+	stopOrder     []string
+	discoverErr   error
 }
 
 func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
@@ -150,6 +205,9 @@ func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot)
 	}
 	if robot.Name == f.failRobot {
 		port.startErr = errors.New("vehicle start failed")
+	}
+	if robot.Name == f.notReadyRobot {
+		port.readyErr = errors.New("app API never answered")
 	}
 	f.ports = append(f.ports, port)
 	return port
@@ -202,7 +260,7 @@ func TestStartDelegatesThroughWorldAndVehiclePorts(t *testing.T) {
 func TestStartWorldThenApp(t *testing.T) {
 	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1"}})
 	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
-	orch := Orchestrator{Engine: engine}
+	orch := Orchestrator{Engine: engine, AppReady: alwaysReady}
 	cfg := contract.StartConfig{
 		Robots: 1, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
 		Partition: contract.DefaultPartition, DataRoot: t.TempDir(),
@@ -312,7 +370,7 @@ func TestStatusAggregatesIndependentVehiclePorts(t *testing.T) {
 	}}
 	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}})
 	engine.ready = string(report)
-	orch := Orchestrator{Engine: engine}
+	orch := Orchestrator{Engine: engine, AppReady: alwaysReady}
 
 	status, err := orch.Status(context.Background())
 	if err != nil {
@@ -453,7 +511,7 @@ func TestStartStopsPreviouslyDiscoveredVehicles(t *testing.T) {
 }
 
 func TestStartRejectsEmptyAppImage(t *testing.T) {
-	orch := Orchestrator{Engine: &fakeEngine{infos: map[string]ContainerInfo{}}}
+	orch := Orchestrator{Engine: &fakeEngine{infos: map[string]ContainerInfo{}}, AppReady: alwaysReady}
 	_, err := orch.Start(context.Background(), contract.StartConfig{Robots: 1, World: "simple", EnvImage: "env"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -502,7 +560,7 @@ func TestStopStopsWorldAndApps(t *testing.T) {
 			Labels: appLabels("robot1", 1),
 		},
 	}}
-	orch := Orchestrator{Engine: engine}
+	orch := Orchestrator{Engine: engine, AppReady: alwaysReady}
 	if err := orch.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +723,7 @@ func commandValue(command []string, flag string) (string, bool) {
 func TestViewersArePerRobot(t *testing.T) {
 	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2", "robot3"}})
 	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
-	orch := Orchestrator{Engine: engine}
+	orch := Orchestrator{Engine: engine, AppReady: alwaysReady}
 	cfg := contract.StartConfig{
 		Robots: 3, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
 		Partition: contract.DefaultPartition, DataRoot: t.TempDir(),
@@ -712,6 +770,26 @@ func TestViewersArePerRobot(t *testing.T) {
 	}
 }
 
+func TestStartFailsAndRollsBackWhenVehicleAppNeverServes(t *testing.T) {
+	worldPort := &fakeWorldPort{}
+	vehicleFactory := &fakeVehicleFactory{notReadyRobot: "robot1"}
+	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory}
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
+	}); err == nil {
+		t.Fatal("expected start to fail when the vehicle app never serves")
+	}
+	if !worldPort.stopped {
+		t.Fatal("world was not rolled back")
+	}
+	if len(vehicleFactory.ports) != 1 || !vehicleFactory.ports[0].stopped {
+		t.Fatalf("vehicle was not rolled back: %+v", vehicleFactory.ports)
+	}
+}
+
+// alwaysReady stands in for a vehicle whose app is already serving.
+func alwaysReady(context.Context, int) error { return nil }
+
 func sessionFromCommand(t *testing.T, command []string) contract.Session {
 	t.Helper()
 	for i, item := range command {
@@ -725,4 +803,108 @@ func sessionFromCommand(t *testing.T, command []string) contract.Session {
 	}
 	t.Fatalf("missing --session in %v", command)
 	return contract.Session{}
+}
+
+func TestStartInitializesEachVehicleRegistry(t *testing.T) {
+	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1", "robot2"}})
+	dataRoot := t.TempDir()
+	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
+	orch := Orchestrator{Engine: engine, AppReady: alwaysReady}
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 2, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
+		Partition: contract.DefaultPartition, DataRoot: dataRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	apps := map[string]ContainerSpec{}
+	for _, spec := range engine.started {
+		if spec.Labels[contract.LabelRole] == contract.RoleApp {
+			apps[spec.Labels[vehicleRobotLabel]] = spec
+		}
+	}
+	for _, want := range []struct {
+		name       string
+		membership int
+	}{
+		{name: "robot1", membership: syncMembershipPortBase},
+		{name: "robot2", membership: syncMembershipPortBase + syncPortStride},
+	} {
+		spec, ok := apps[want.name]
+		if !ok {
+			t.Fatalf("no app container for %s", want.name)
+		}
+		// The container command stays the plain launch; initialization happened
+		// before it, on the host, and reaches the container as mounts.
+		if len(spec.Command) < 3 || spec.Command[0] != "ros2" || spec.Command[1] != "launch" {
+			t.Fatalf("%s command=%v", want.name, spec.Command)
+		}
+		hostDir := filepath.Join(dataRoot, want.name, appConfigHostDir)
+		wantBinds := []string{
+			filepath.Join(hostDir, "function.basic_setting.yaml") + ":" + appRegistryDir + "/" + vehicleSerialRegistry,
+			filepath.Join(hostDir, "function.sync.yaml") + ":" + appRegistryDir + "/" + syncRegistry,
+		}
+		for _, wantBind := range wantBinds {
+			if !slices.Contains(spec.Binds, wantBind) {
+				t.Fatalf("%s binds=%v missing %s", want.name, spec.Binds, wantBind)
+			}
+		}
+		if len(spec.Binds) != 1+len(wantBinds) {
+			t.Fatalf("%s binds=%v", want.name, spec.Binds)
+		}
+		registry, err := os.ReadFile(filepath.Join(hostDir, "function.basic_setting.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(registry), "default_value: \""+want.name+"\"") {
+			t.Fatalf("%s serial not pinned:\n%s", want.name, registry)
+		}
+		if !strings.Contains(string(registry), `default_value: "EasyGo"`) {
+			t.Fatalf("%s unrelated entries disturbed:\n%s", want.name, registry)
+		}
+		sync, err := os.ReadFile(filepath.Join(hostDir, "function.sync.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(sync), "default_value: "+strconv.Itoa(want.membership)) {
+			t.Fatalf("%s membership port not pinned to %d:\n%s", want.name, want.membership, sync)
+		}
+		if want.membership != syncMembershipPortBase && strings.Contains(string(sync), "default_value: "+strconv.Itoa(syncMembershipPortBase)) {
+			t.Fatalf("%s stale membership port left:\n%s", want.name, sync)
+		}
+	}
+	robot2 := apps["robot2"]
+	if got := robot2.Env["MDNS_PORT"]; got != strconv.Itoa(mdnsPortBase+syncPortStride) {
+		t.Fatalf("robot2 MDNS_PORT=%q", got)
+	}
+	if _, ok := robot2.Env["PORT"]; ok {
+		t.Fatal("PORT must be left to the launch file")
+	}
+}
+
+func TestStartEnablesMultiAMRPeerLink(t *testing.T) {
+	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1"}})
+	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
+	orch := Orchestrator{Engine: engine, AppReady: alwaysReady}
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 1, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
+		Partition: contract.DefaultPartition, DataRoot: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var app ContainerSpec
+	for _, spec := range engine.started {
+		if spec.Labels[contract.LabelRole] == contract.RoleApp {
+			app = spec
+		}
+	}
+	if app.Env["EASYGO_BLUETOOTH_TRANSPORT"] != "udp" {
+		t.Fatalf("peer link transport=%q", app.Env["EASYGO_BLUETOOTH_TRANSPORT"])
+	}
+	if app.Env["ENABLE_MULTI_AMR_AVOIDANCE"] != "true" {
+		t.Fatalf("multi-AMR avoidance=%q", app.Env["ENABLE_MULTI_AMR_AVOIDANCE"])
+	}
+	if app.Env["EASYGO_BLUETOOTH_UDP_PORT"] != strconv.Itoa(multiAMRPeerPort) {
+		t.Fatalf("peer link port=%q", app.Env["EASYGO_BLUETOOTH_UDP_PORT"])
+	}
 }

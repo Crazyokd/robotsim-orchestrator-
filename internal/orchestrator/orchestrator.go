@@ -42,6 +42,36 @@ const (
 	// world models (pallets, cages) in the bringup package. Empty here means
 	// every robot link mesh fails to load and the vehicle renders as nothing.
 	appGZResourcePath = "/opt/sros/share:/opt/sros/share/easygo_sim_bringup/models"
+
+	// appRegistryDir is where the app image keeps its parameter registry. simenv
+	// overrides individual files inside it instead of replacing the directory,
+	// so every other default the image ships stays authoritative.
+	appRegistryDir = "/opt/sros/share/easygo-app/cfg"
+	// appConfigHostDir holds, per robot, the registry files simenv overrides.
+	appConfigHostDir = "app-config"
+
+	// vehicleSerialRegistry carries the vehicle identity.
+	vehicleSerialRegistry = "param-registry/function.basic_setting.yaml"
+	// syncRegistry carries the sync service's cluster-gossip membership port.
+	syncRegistry = "param-registry/function.sync.yaml"
+	// vehicleSerialKey / syncMembershipPortKey are the registry entries simenv
+	// pins per robot.
+	vehicleSerialKey      = "main.vehicle_serial_no"
+	syncMembershipPortKey = "sync.membership_port"
+
+	// appReadyTimeout bounds how long a starting vehicle may take to serve its
+	// API before the whole start is rolled back.
+	appReadyTimeout  = 3 * time.Minute
+	appReadyInterval = 2 * time.Second
+
+	// multiAMRPeerPort is the UDP peer-link port standing in for BLE.
+	multiAMRPeerPort = 16889
+	// Per-robot offsets for the sync service's discovery sockets. Several
+	// vehicles sharing one host network would otherwise bind the same port and
+	// easygo-app would abort with "Address already in use".
+	mdnsPortBase           = 25353
+	syncMembershipPortBase = 25354
+	syncPortStride         = 100
 )
 
 type ContainerSpec struct {
@@ -66,6 +96,8 @@ type ContainerInfo struct {
 
 type Engine interface {
 	ImageID(ctx context.Context, ref string) (string, error)
+	// ReadImageFile reads one file out of an image without running anything.
+	ReadImageFile(ctx context.Context, image, path string) ([]byte, error)
 	Start(ctx context.Context, spec ContainerSpec) error
 	Stop(ctx context.Context, name string) error
 	Inspect(ctx context.Context, name string) (ContainerInfo, error)
@@ -113,6 +145,10 @@ type WorldPort interface {
 
 type VehiclePort interface {
 	Start(ctx context.Context) error
+	// WaitReady reports when the vehicle is actually serving: its app answered
+	// on the API. Start returning nil only means the container exists, so the
+	// orchestrator treats a vehicle as started once both have succeeded.
+	WaitReady(ctx context.Context) error
 	Status(ctx context.Context) (AppStatus, error)
 	Stop(ctx context.Context) error
 	SeedMap(ctx context.Context, archive []byte) error
@@ -128,7 +164,10 @@ type Orchestrator struct {
 	World          WorldPort
 	VehicleFactory VehiclePortFactory
 	Sleep          func(context.Context, time.Duration) error
-	assetsDir      string
+	// AppReady probes a vehicle's API until it answers. Nil means the real HTTP
+	// probe; tests substitute it so they do not need a listening app.
+	AppReady  func(ctx context.Context, apiPort int) error
+	assetsDir string
 }
 
 const defaultAssetsDir = "deploy/assets"
@@ -181,6 +220,9 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		vehiclePort := vehicleFactory.New(session, robot)
 		vehiclePorts = append(vehiclePorts, vehiclePort)
 		if err := vehiclePort.Start(ctx); err != nil {
+			return Status{}, errors.Join(err, rollback())
+		}
+		if err := vehiclePort.WaitReady(ctx); err != nil {
 			return Status{}, errors.Join(err, rollback())
 		}
 	}
@@ -273,7 +315,7 @@ func (o Orchestrator) vehicleFactory(cfg contract.StartConfig) VehiclePortFactor
 	if o.VehicleFactory != nil {
 		return o.VehicleFactory
 	}
-	return EasyGoVehicleFactory{Engine: o.Engine, Config: cfg}
+	return EasyGoVehicleFactory{Engine: o.Engine, Config: cfg, AppReady: o.AppReady}
 }
 
 func stopVehiclePorts(ctx context.Context, vehiclePorts []VehiclePort) error {
@@ -356,8 +398,9 @@ func (w DockerWorld) Stop(ctx context.Context) error {
 }
 
 type EasyGoVehicleFactory struct {
-	Engine Engine
-	Config contract.StartConfig
+	Engine   Engine
+	Config   contract.StartConfig
+	AppReady func(ctx context.Context, apiPort int) error
 }
 
 func (f EasyGoVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
@@ -371,6 +414,7 @@ func (f EasyGoVehicleFactory) newVehicle(session contract.Session, robot contrac
 		Session:       session,
 		Robot:         robot,
 		ContainerName: containerName,
+		AppReady:      f.AppReady,
 	}
 }
 
@@ -413,6 +457,7 @@ type EasyGoVehicle struct {
 	Session       contract.Session
 	Robot         contract.Robot
 	ContainerName string
+	AppReady      func(ctx context.Context, apiPort int) error
 }
 
 func (v EasyGoVehicle) Start(ctx context.Context) error {
@@ -432,12 +477,16 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 	if err := os.MkdirAll(hostSros, 0o755); err != nil {
 		return err
 	}
+	appConfigBinds, err := v.initializeAppConfig(ctx, cfg, hostSros)
+	if err != nil {
+		return err
+	}
 	runtime := easyGoRuntimeFor(v.Robot.Index)
 	useRviz := cfg.WantsRviz(v.Robot.Index)
 	useGzGui := cfg.WantsGzGui(v.Robot.Index)
 	useCameras := cfg.WantsCameras(v.Robot.Index)
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, useRviz, useGzGui, useCameras)...)
-	binds := []string{hostSros + ":/sros"}
+	binds := append([]string{hostSros + ":/sros"}, appConfigBinds...)
 	if useGzGui {
 		if bind := gzGuiAssetBind(); bind != "" {
 			binds = append(binds, bind)
@@ -462,6 +511,115 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// initializeAppConfig pins this robot's own parameter values and returns the
+// mounts that put them in place. It runs before the vehicle container starts:
+// easygo-app reads these parameters during startup, so they cannot be applied
+// afterwards.
+//
+// The image already ships every default, so initialization only overwrites the
+// parameters that must differ per robot. Each one is read out of the image,
+// patched in place in Go, and mounted back over the image's own file; nothing
+// else about the registry changes.
+func (v EasyGoVehicle) initializeAppConfig(ctx context.Context, cfg contract.StartConfig, hostSros string) ([]string, error) {
+	overrides := v.initialRegistryDefaults()
+	hostDir := filepath.Join(hostSros, appConfigHostDir)
+	if err := os.RemoveAll(hostDir); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		return nil, err
+	}
+	staged := make(map[string]string, len(overrides))
+	binds := make([]string, 0, len(overrides))
+	for _, override := range overrides {
+		name := filepath.Base(override.Registry)
+		if other, clash := staged[name]; clash {
+			return nil, fmt.Errorf("registry overrides %s and %s stage the same file name", other, override.Registry)
+		}
+		staged[name] = override.Registry
+
+		registry, err := v.Engine.ReadImageFile(ctx, cfg.AppImage, appRegistryDir+"/"+override.Registry)
+		if err != nil {
+			return nil, fmt.Errorf("read %s from %s: %w", override.Registry, cfg.AppImage, err)
+		}
+		patched, err := patchRegistryDefault(registry, override.Key, override.Value)
+		if err != nil {
+			return nil, fmt.Errorf("initialize app config for %s: %w", v.Robot.Name, err)
+		}
+		hostPath := filepath.Join(hostDir, name)
+		if err := os.WriteFile(hostPath, patched, 0o644); err != nil {
+			return nil, fmt.Errorf("initialize app config for %s: %w", v.Robot.Name, err)
+		}
+		binds = append(binds, hostPath+":"+appRegistryDir+"/"+override.Registry)
+	}
+	return binds, nil
+}
+
+// initialRegistryDefaults lists the parameter defaults simenv pins for one
+// robot. Add an entry here to make another parameter differ per vehicle.
+func (v EasyGoVehicle) initialRegistryDefaults() []registryOverride {
+	return []registryOverride{
+		// Vehicle identity. It is the multi-AMR peer id: with it empty every
+		// vehicle advertises the same one, peers discard each other as their own
+		// frames, and a multi-vehicle world never converges.
+		{Registry: vehicleSerialRegistry, Key: vehicleSerialKey, Value: strconv.Quote(v.Robot.Name)},
+		// A UDP bind for the sync service's cluster-gossip discovery. Vehicles
+		// sharing one host network would otherwise collide and easygo-app would
+		// abort at startup.
+		{
+			Registry: syncRegistry,
+			Key:      syncMembershipPortKey,
+			Value:    strconv.Itoa(syncMembershipPortBase + (v.Robot.Index-1)*syncPortStride),
+		},
+	}
+}
+
+type registryOverride struct {
+	// Registry is the registry file relative to appRegistryDir.
+	Registry string
+	Key      string
+	// Value is YAML scalar text, already quoted if the scalar needs quoting.
+	Value string
+}
+
+// patchRegistryDefault rewrites default_value on one registry entry, preserving
+// the document's formatting.
+func patchRegistryDefault(registry []byte, key, value string) ([]byte, error) {
+	keyLine := "- key: " + key
+	lines := strings.Split(string(registry), "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == keyLine {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil, fmt.Errorf("registry has no %s entry", key)
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "- key: ") {
+			end = i
+			break
+		}
+	}
+	entryIndent := lines[start][:len(lines[start])-len(strings.TrimLeft(lines[start], " "))]
+	assignment := "default_value: " + value
+	for i := start + 1; i < end; i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "default_value:") {
+			lineIndent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " "))]
+			lines[i] = lineIndent + assignment
+			return []byte(strings.Join(lines, "\n")), nil
+		}
+	}
+	patched := make([]string, 0, len(lines)+1)
+	patched = append(patched, lines[:start+1]...)
+	patched = append(patched, entryIndent+"  "+assignment)
+	patched = append(patched, lines[start+1:]...)
+	return []byte(strings.Join(patched, "\n")), nil
 }
 
 func (v EasyGoVehicle) Status(ctx context.Context) (AppStatus, error) {
@@ -494,11 +652,6 @@ func (v EasyGoVehicle) containerName() string {
 func (v EasyGoVehicle) SeedMap(ctx context.Context, archive []byte) error {
 	runtime := easyGoRuntimeFor(v.Robot.Index)
 	importURL := fmt.Sprintf("http://127.0.0.1:%d/api/v6/map/import", runtime.apiPort)
-
-	// Wait for the app to be ready.
-	if err := waitAppReady(ctx, importURL); err != nil {
-		return fmt.Errorf("seed map %s: %w", v.Robot.Name, err)
-	}
 
 	body := new(bytes.Buffer)
 	mp := multipart.NewWriter(body)
@@ -546,13 +699,24 @@ func (o Orchestrator) seedWorldMap(ctx context.Context, world string, vehicles [
 	return nil
 }
 
-func waitAppReady(ctx context.Context, importURL string) error {
-	deadline := time.Now().Add(3 * time.Minute)
+// WaitReady blocks until the vehicle's app answers on its API, so that a
+// successfully started vehicle is one that is actually serving.
+func (v EasyGoVehicle) WaitReady(ctx context.Context) error {
+	probe := v.AppReady
+	if probe == nil {
+		probe = waitForAppAPI
+	}
+	if err := probe(ctx, easyGoRuntimeFor(v.Robot.Index).apiPort); err != nil {
+		return fmt.Errorf("wait for %s app: %w", v.Robot.Name, err)
+	}
+	return nil
+}
+
+func waitForAppAPI(ctx context.Context, apiPort int) error {
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v6/map", apiPort)
+	deadline := time.Now().Add(appReadyTimeout)
 	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("app not ready after 3m")
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, importURL[:len(importURL)-len("/map/import")]+"/map", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return err
 		}
@@ -563,10 +727,13 @@ func waitAppReady(ctx context.Context, importURL string) error {
 				return nil
 			}
 		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("app API on port %d silent for %s", apiPort, appReadyTimeout)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(appReadyInterval):
 		}
 	}
 }
@@ -736,6 +903,14 @@ func appEnv(robot contract.Robot, session contract.Session, runtime easyGoRuntim
 		"EASYGO_SIM_APP_ROOT":           runtime.runtimeRoot + "/easygo-app",
 		"EASYGO_WEBAPP_DIR":             runtime.runtimeRoot + "/webapp",
 		"GZ_SIM_RESOURCE_PATH":          appGZResourcePath,
+		// Multi-AMR peer discovery: a UDP broadcast stands in for the BLE peer
+		// link a real vehicle uses, so two robots in one host can see each other.
+		"EASYGO_BLUETOOTH_TRANSPORT": "udp",
+		"EASYGO_BLUETOOTH_UDP_PORT":  strconv.Itoa(multiAMRPeerPort),
+		"ENABLE_MULTI_AMR_AVOIDANCE": "true",
+		// The sync service advertises this port for mDNS discovery. The launch
+		// owns PORT (the app's HTTP port); only mDNS needs a per-robot offset.
+		"MDNS_PORT": strconv.Itoa(mdnsPortBase + (robot.Index-1)*syncPortStride),
 	}
 }
 
