@@ -93,3 +93,18 @@ func (g GZ) CreateEntity(ctx context.Context, world, name, sdfPath string, pose 
 	}
 	return nil
 }
+
+// EntityExists 通过 `gz model --list` 回查实体。
+// 注意：create 服务对"文件读不到"依然回 data: true，所以响应不能当成功判据。
+func (g GZ) EntityExists(ctx context.Context, world, name string) (bool, error) {
+	out, err := g.run(ctx, "gz", "model", "--list")
+	if err != nil {
+		return false, fmt.Errorf("list models in world %s: %w", world, err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == "- "+name {
+			return true, nil
+		}
+	}
+	return false, nil
+}

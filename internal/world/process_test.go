@@ -19,6 +19,8 @@ type fakeTransport struct {
 	clock          bool
 	created        []string
 	createdPaths   []string
+	createSawFile  []bool
+	existing       map[string]bool
 	server         chan error
 	waitClock      func(ctx context.Context) error
 	createErr      error
@@ -45,9 +47,18 @@ func (f *fakeTransport) CreateEntity(_ context.Context, _, name, sdfPath string,
 	if f.createErr != nil {
 		return f.createErr
 	}
+	_, err := os.Stat(sdfPath)
+	f.createSawFile = append(f.createSawFile, err == nil)
 	f.created = append(f.created, name)
 	f.createdPaths = append(f.createdPaths, sdfPath)
 	return nil
+}
+
+func (f *fakeTransport) EntityExists(_ context.Context, _, name string) (bool, error) {
+	if f.existing == nil {
+		return true, nil
+	}
+	return f.existing[name], nil
 }
 
 func fixture(t *testing.T) (worldsRoot, modelPath, readyPath string) {
@@ -106,8 +117,14 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	if len(transport.createdPaths) != 1 {
 		t.Fatalf("created paths=%v", transport.createdPaths)
 	}
-	if _, err := os.Stat(transport.createdPaths[0]); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("temporary SDF still exists: %v", err)
+	// 重写后的 SDF 必须在 create 调用期间**存在**（gz 是先回响应、后读文件），
+	// 并在世界进程退出后才被清掉。
+	if len(transport.createSawFile) != 1 || !transport.createSawFile[0] {
+		t.Fatalf("rewritten SDF was already gone during create: %v", transport.createSawFile)
+	}
+	createdSDF := transport.createdPaths[0]
+	if _, err := os.Stat(createdSDF); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rewritten SDF should be cleaned up after the process exits: %v", err)
 	}
 	raw := <-readyRaw
 	if raw == nil {
@@ -244,5 +261,31 @@ func waitFile(t *testing.T, path string, timeout time.Duration) {
 			t.Fatalf("timed out waiting for %s", path)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// gz 的 create 服务对"文件读不到"也回 data: true，只看调用是否报错会漏掉
+// "实体根本没建出来"（实机表现：世界进程照写 ready，车端却拿不到任何传感器数据）。
+// 所以世界进程必须回查实体，查不到就启动失败。
+func TestProcessFailsWhenEntityNeverAppears(t *testing.T) {
+	worldsRoot, modelPath, readyPath := fixture(t)
+	transport := &fakeTransport{existing: map[string]bool{"robot1": false}}
+	restore := entityWaitTimeout
+	entityWaitTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { entityWaitTimeout = restore })
+	proc := Process{
+		AssetsRoot: worldsRoot,
+		ModelPath:  modelPath,
+		ReadyPath:  readyPath,
+		Transport:  transport,
+		WorldName:  "simple",
+		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
+	}
+	err := proc.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "robot1") {
+		t.Fatalf("expected missing-entity error, got: %v", err)
+	}
+	if _, statErr := os.Stat(readyPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("ready file should not be written when an entity is missing: %v", statErr)
 	}
 }
