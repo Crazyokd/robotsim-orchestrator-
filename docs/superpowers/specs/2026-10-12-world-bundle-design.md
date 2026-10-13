@@ -372,6 +372,57 @@ app 要 2~4 分钟），等不到就明确失败返回，不再报成"定位未�
 → `corridor rc=1`（s3/s4/s5/s6 绿；s1 7/1、s2 6/2 见上）、`simple rc=3`（s2~s7、s9 绿，s8 为 (d) 的 3）。
 两次全量跑结论一致。
 
+## 5.10 「最终消解」卡住的根因链：改过、验过，属跨仓设计缺口（2026-10-13）
+
+§5.9(a) 说真车对头互等"机制全活、最终消解不稳"。这一节把"为什么消解不了"钉到可复现的证据，并交代
+**试过哪些修法、结果如何**——结论是这不是本仓能修的一行 bug，需要 easygo 侧定收敛策略。
+
+**(1) 确定性的方案循环（读源码 + 真车日志）**：协调车（`(robot_id,boot_id)` 字典序最小者，恒为 robot1）
+的 `multi-AMR recovery plan selection ... chosen=` 呈 3 轮一循环：
+
+```
+chosen="CONTINUE_TASK" / "DRIVE_ON_HEADING_BACKWARD" / "DRIVE_ON_HEADING_BACKWARD" / 循环
+```
+
+成因在 `crates/multi-amr-avoidance/src/lib.rs` 的升级判据：`escalate = previous_local_action_kind ==
+Some("CONTINUE_TASK") && <首选属于本车>`——一旦上一轮是 Nav2 动作，下一轮就退回首选，来回翻，
+两个动作都执行不到底。
+
+**(2) 试过修：把升级判据锁存（代码）**。改成"只要上一轮本车动过（非 HOLD）就不再退回首选"，
+抽出 `recovery_escalation_latched()` 并补单测（5/5 过），编译、构建、部署候选二进制到两个容器都确认过。
+**结果：s1 仍是 7/1——不足以消解。**
+
+**(3) 为什么锁存也救不了**：`previous_local_action_kind` 来自 state-center 的 `action_kind`，而它在
+"等 peer Ready / 等 ActionOptionSummary"的 tick 会被写成新一轮 `summarize_multi_amr_avoidance_state`
+的值（`action_kind: None`）——跨 tick 真正存活的只有 `event_id / round_id / message`。
+所以锁存仍被周期性 None 打断；而 `round_id` 只在"recovery succeeded"后推进，也无法当"已经试过"的判据。
+
+**(4) 试过修：把恢复幅度调大（参数，非代码）**。幅度是 nav2 参数而非硬编码：
+`multi_amr_recovery_heading_distance_m=0.3`、`_speed_mps=0.1`、`_time_allowance_s=5.0`
+（`nav2_bt_navigator/src/multi_amr_navigation_boundary.cpp:550-554`）。改成 **1.5 m / 0.3 m/s / 20 s**
+后：冲突触发由 200+ 次掉到 3~4 次，**s1 反而由 7/1 变 5/3**（两车更早停在走廊中间），arena s1 不变。
+**已回滚**，harness 保持镜像默认。
+
+**(5) 卡住的真实形态（同一栈计数）**：
+
+```
+242 conflict detected / 168 recovery plan selection（每 ~0.5 s 一次）
+ 96 waiting for peer Ready messages / 51 execute_recovery … Aborted / 51 tick failed(request rejected)
+ 58 recovery succeeded; waiting for conflict-clear
+  4 participant action executed          4 次本车执行
+  1 task resume requested after conflict cleared
+```
+
+方案在选、对端"成功"过 54 次，**冲突始终没消解**；两车最后停在走廊中间（852 mm / 511 mm）互不冲突、
+也没有换位——即"多方视角下冲突消失"之后，多车层不再介入，而 nav2 在 1.2 m 窄道里也规划不过去。
+
+**(6) 归属**：恢复动作的**收敛策略**（一次 nudge 之后如何保证"退到能错身的空间"、如何保证"退完各自通过"、
+如何定义"真的解开了"）属 easygo 侧设计；`docs/specs/2026-08-19-multi-amr-recovery-plan-design.md` §8/§11
+本就写明"第一版不声称 continue 一定能解除冲突"。本仓（环境/编排/世界/场景）不改判据、不放宽断言。
+
+**(7) 留档**：候选补丁 `~/.cache/simenv-scenarios/patches/easygo-escalate-latch.patch`（锁存 + 单测；
+已编译/已部署；单独效果中性）。它本身是对的（任何"升级"策略都需要它），但不足以消解，需与收敛策略一起落地。
+
 ## 6. 初始坐标必然定位成功
 
 约定与判据：
