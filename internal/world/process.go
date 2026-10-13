@@ -174,7 +174,7 @@ func writeRobotSDF(dir, modelPath string, body Body) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read model: %w", err)
 	}
-	rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.TopicPrefix, body.Pose.Yaw, body.KeepCameras)
+	rewritten, err := RewriteRobotSDF(string(sdf), body.Name, body.TopicPrefix, body.KeepCameras)
 	if err != nil {
 		return "", err
 	}

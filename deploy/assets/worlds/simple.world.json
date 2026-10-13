@@ -1,0 +1,31 @@
+{
+  "world": "simple",
+  "map_name": "arena_world",
+  "origin_offset_mm": {"x": 1978.0, "y": -3181.5},
+  "stations": [
+    {"id": 1, "x": 5820, "y": 80, "yaw": 0},
+    {"id": 2, "x": -7960, "y": -1080, "yaw": 0},
+    {"id": 3, "x": -15600, "y": -7200, "yaw": 0},
+    {"id": 4, "x": 6060, "y": 13220, "yaw": 0},
+    {"id": 5, "x": 12600, "y": -6180, "yaw": 0},
+    {"id": 6, "x": 12576, "y": -3724, "yaw": 0},
+    {"id": 7, "x": 12500, "y": 13000, "yaw": 0},
+    {"id": 8, "x": 12600, "y": -6500, "yaw": 0}
+  ],
+  "initial_poses": [
+    {"index": 1, "x": 0, "y": 0, "z": 0.05, "yaw": 0},
+    {"index": 2, "x": 3.0, "y": 0.0, "z": 0.05, "yaw": 0}
+  ],
+  "scenarios": [
+    "s1_two_real_mutual_wait.sh",
+    "s2_predicted_blocking.sh",
+    "s3_drive_on_heading.sh",
+    "s4_handshake_drift.sh",
+    "s5_three_members.sh",
+    "s6_peer_rejects_plan.sh",
+    "s7_peer_vanishes.sh",
+    "s8_estop_interrupts_recovery.sh",
+    "s9_wide_lane_no_unlock.sh"
+  ],
+  "source_sha": "05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1"
+}

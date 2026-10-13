@@ -65,7 +65,7 @@ const (
 
 	// appReadyTimeout bounds how long a starting vehicle may take to serve its
 	// API before the whole start is rolled back.
-	appReadyTimeout  = 3 * time.Minute
+	appReadyTimeout  = 5 * time.Minute
 	appReadyInterval = 2 * time.Second
 
 	// multiAMRPeerPort is the UDP peer-link port standing in for BLE.
@@ -156,8 +156,12 @@ type VehiclePort interface {
 	Status(ctx context.Context) (AppStatus, error)
 	Stop(ctx context.Context) error
 	SeedMap(ctx context.Context, archive []byte) error
-	// Localize puts the vehicle on the map at the pose its world spawns it at.
-	Localize(ctx context.Context, mapName string) error
+	// SeedStations makes the world bundle's stations exist on the vehicle's map.
+	// 站点的坐标是 bundle 的一部分：世界换了而站点没跟上，这里必须失败。
+	SeedStations(ctx context.Context, mapName string, stations []contract.Station) error
+	// Localize puts the vehicle on the map at the given world pose (bundle 的
+	// initial_poses 优先于 session 的 spawn 位姿).
+	Localize(ctx context.Context, mapName string, pose contract.Pose) error
 }
 
 type VehiclePortFactory interface {
@@ -179,10 +183,51 @@ type Orchestrator struct {
 const defaultAssetsDir = "deploy/assets"
 
 func (o Orchestrator) assetsPath() string {
-	if o.assetsDir != "" {
-		return o.assetsDir
+	return assetsPath(o.assetsDir)
+}
+
+// assetsPath 解析资产目录。默认值 `deploy/assets` 是**相对可执行文件所在目录**解析的，
+// 不是相对 cwd：`simenv` 是仓库内的开发工具，从任意目录调用都该找到同一份资产。
+//
+// 这里踩过一次：原来直接返回相对路径，于是从别的目录调用时
+// `deploy/assets/worlds/<world>.sdf` 找不到 → `worldHandoverBind` **静默返回空**
+// → 车端容器拿不到环境这份世界文件 → 车端 launch 按自己的 worlds 目录校验世界名时
+// 只认镜像内已有的世界。表现是：arena（镜像里有 simple.sdf）正常，
+// 而 corridor 起栈时 app 起不来（`app API on port 18189 silent`）——而同样的命令
+// 在仓库根目录下手动跑就成功。
+func assetsPath(dir string) string {
+	if dir != "" {
+		return dir
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), defaultAssetsDir)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 	return defaultAssetsDir
+}
+
+// appWorldsDir 是车端镜像里 easygo_sim_bringup 的世界目录：车端 launch 按它校验世界名
+// （easygo_sim_bringup/launch/sim_nav2.launch.py 的 `_world_path`），而世界本身由环境提供。
+// 这是**过渡态**：easygo 侧接受显式世界路径后（合同 §5 第 1 条），本常量与 worldHandoverBind 一起删。
+const appWorldsDir = "/opt/sros/share/easygo_sim_bringup/worlds"
+
+// worldHandoverBind 把环境这份世界 SDF 只读挂进车端容器，让"同一份文件既喂 gz server
+// 又喂车端校验"——否则世界在两边各存一份，内容会悄悄漂移。世界文件不在环境里时不挂
+// （裸世界只看场景，车端用它自己那份）。
+func worldHandoverBind(assetsDir, world string) string {
+	path := filepath.Join(assetsPath(assetsDir), "worlds", world+".sdf")
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	// 挂载源必须是绝对路径：默认资产目录是相对的（`deploy/assets`），Docker 会把它
+	// 当成 volume 名而拒绝创建容器。
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	return absolute + ":" + filepath.Join(appWorldsDir, world+".sdf") + ":ro"
 }
 
 func (o Orchestrator) worldMapExportPath(world string) string {
@@ -192,6 +237,15 @@ func (o Orchestrator) worldMapExportPath(world string) string {
 func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Status, error) {
 	cfg = withDefaults(cfg)
 	if err := cfg.Validate(); err != nil {
+		return Status{}, err
+	}
+	// 世界 bundle 决定初始位姿：生成（世界进程 spawn）与定位必须用同一份，
+	// 否则会出现"车在东端待避区、却被告知你在西端"这种自相矛盾的启动。
+	bundle, err := o.loadWorldBundle(cfg.World)
+	if err != nil {
+		return Status{}, err
+	}
+	if err := applyBundlePoses(&cfg, bundle); err != nil {
 		return Status{}, err
 	}
 	session, err := cfg.Session()
@@ -232,16 +286,9 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 			return Status{}, errors.Join(err, rollback())
 		}
 	}
-	mapName, err := o.seedWorldMap(ctx, session.World, vehiclePorts)
-	if err != nil {
+	// world init：bundle → 地图 → 站点 → 放车定位。任一步不满足即失败退出。
+	if _, err := o.worldInit(ctx, session, vehiclePorts, bundle); err != nil {
 		return Status{}, errors.Join(err, rollback())
-	}
-	if mapName != "" {
-		for _, vehiclePort := range vehiclePorts {
-			if err := vehiclePort.Localize(ctx, mapName); err != nil {
-				return Status{}, errors.Join(err, rollback())
-			}
-		}
 	}
 	status, err := statusFromPorts(ctx, worldPort, vehiclePorts)
 	if err != nil {
@@ -329,7 +376,7 @@ func (o Orchestrator) vehicleFactory(cfg contract.StartConfig) VehiclePortFactor
 	if o.VehicleFactory != nil {
 		return o.VehicleFactory
 	}
-	return EasyGoVehicleFactory{Engine: o.Engine, Config: cfg, AppReady: o.AppReady}
+	return EasyGoVehicleFactory{Engine: o.Engine, Config: cfg, AppReady: o.AppReady, AssetsDir: o.assetsDir}
 }
 
 func stopVehiclePorts(ctx context.Context, vehiclePorts []VehiclePort) error {
@@ -412,9 +459,10 @@ func (w DockerWorld) Stop(ctx context.Context) error {
 }
 
 type EasyGoVehicleFactory struct {
-	Engine   Engine
-	Config   contract.StartConfig
-	AppReady func(ctx context.Context, apiPort int) error
+	Engine    Engine
+	Config    contract.StartConfig
+	AppReady  func(ctx context.Context, apiPort int) error
+	AssetsDir string
 }
 
 func (f EasyGoVehicleFactory) New(session contract.Session, robot contract.Robot) VehiclePort {
@@ -429,6 +477,7 @@ func (f EasyGoVehicleFactory) newVehicle(session contract.Session, robot contrac
 		Robot:         robot,
 		ContainerName: containerName,
 		AppReady:      f.AppReady,
+		AssetsDir:     f.AssetsDir,
 	}
 }
 
@@ -472,6 +521,7 @@ type EasyGoVehicle struct {
 	Robot         contract.Robot
 	ContainerName string
 	AppReady      func(ctx context.Context, apiPort int) error
+	AssetsDir     string
 }
 
 func (v EasyGoVehicle) Start(ctx context.Context) error {
@@ -501,6 +551,9 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 	useCameras := cfg.WantsCameras(v.Robot.Index)
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, useRviz, useGzGui, useCameras)...)
 	binds := append([]string{hostSros + ":/sros"}, appConfigBinds...)
+	if handover := worldHandoverBind(v.AssetsDir, v.Session.World); handover != "" {
+		binds = append(binds, handover)
+	}
 	if useGzGui {
 		if bind := gzGuiAssetBind(); bind != "" {
 			binds = append(binds, bind)
@@ -696,29 +749,6 @@ func (v EasyGoVehicle) SeedMap(ctx context.Context, archive []byte) error {
 	return nil
 }
 
-// seedWorldMap reads the world's optional map export file and distributes it to
-// every vehicle. It returns the map's name, or "" when the world ships no map.
-//
-// A world and its map are one: the map was surveyed in that world, so starting a
-// world is what makes its map available.
-func (o Orchestrator) seedWorldMap(ctx context.Context, world string, vehicles []VehiclePort) (string, error) {
-	archive, err := os.ReadFile(o.worldMapExportPath(world))
-	if err != nil {
-		// No map for this world — not an error.
-		return "", nil
-	}
-	mapName, err := worldMapName(archive)
-	if err != nil {
-		return "", err
-	}
-	for _, vp := range vehicles {
-		if err := vp.SeedMap(ctx, archive); err != nil {
-			return "", err
-		}
-	}
-	return mapName, nil
-}
-
 // worldMapName reports the primary layer name inside a .map_export archive,
 // resolved the same way easygo-app does: among the `{name}0.pgm` entries, the
 // first name that is not a numbered sublayer.
@@ -786,13 +816,13 @@ func mapArchiveReader(archive []byte) (io.Reader, error) {
 	return gzip, nil
 }
 
-// Localize puts this vehicle on the map, at the world pose the session spawned
-// it at. easygo-app takes millimetres and milliradians and drives the AGV
-// through the VDA5050 initPosition action; the manual mode only answers once the
-// localization node reports it is locating, so a returned error means the start
-// did not take.
-func (v EasyGoVehicle) Localize(ctx context.Context, mapName string) error {
-	body, err := initialPoseRequest(mapName, v.Robot.Pose)
+// Localize puts this vehicle on the map at the given **map** pose (the world
+// bundle's initial_poses, converted by mapPose; 缺省是 session 的 spawn 位姿换算后的结果).
+// easygo-app takes millimetres and milliradians and drives the AGV through the
+// VDA5050 initPosition action; 这里在下发之后再断言一次收敛——下发成功不等于定位成功，
+// 坐标系搞错时车端只会静默地定到别处。
+func (v EasyGoVehicle) Localize(ctx context.Context, mapName string, pose contract.Pose) error {
+	body, err := initialPoseRequest(mapName, pose)
 	if err != nil {
 		return fmt.Errorf("localize %s: %w", v.Robot.Name, err)
 	}
@@ -811,7 +841,7 @@ func (v EasyGoVehicle) Localize(ctx context.Context, mapName string) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("localize %s: %s (%s)", v.Robot.Name, resp.Status, strings.TrimSpace(string(respBody)))
 	}
-	return nil
+	return v.awaitPose(ctx, pose)
 }
 
 // initialPoseRequest builds the app's initial-pose body. The world spawns the
@@ -839,6 +869,8 @@ func (v EasyGoVehicle) WaitReady(ctx context.Context) error {
 	return nil
 }
 
+// waitForAppAPI 等车端真的可用：API 答话，并且 init 报 succeeded。
+// API 答话不等于就绪——init 没完成前车端不接受初始位姿。
 func waitForAppAPI(ctx context.Context, apiPort int) error {
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/v6/map", apiPort)
 	deadline := time.Now().Add(appReadyTimeout)
@@ -851,7 +883,7 @@ func waitForAppAPI(ctx context.Context, apiPort int) error {
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode < 300 {
-				return nil
+				return waitForVehicleInit(ctx, apiPort)
 			}
 		}
 		if time.Now().After(deadline) {

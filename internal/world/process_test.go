@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ type fakeTransport struct {
 	clock          bool
 	created        []string
 	createdPaths   []string
+	createdPoses   []contract.Pose
 	createSawFile  []bool
 	existing       map[string]bool
 	server         chan error
@@ -43,7 +45,7 @@ func (f *fakeTransport) WaitClock(ctx context.Context) error {
 	return nil
 }
 
-func (f *fakeTransport) CreateEntity(_ context.Context, _, name, sdfPath string, _ contract.Pose) error {
+func (f *fakeTransport) CreateEntity(_ context.Context, _, name, sdfPath string, pose contract.Pose) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
@@ -51,6 +53,7 @@ func (f *fakeTransport) CreateEntity(_ context.Context, _, name, sdfPath string,
 	f.createSawFile = append(f.createSawFile, err == nil)
 	f.created = append(f.created, name)
 	f.createdPaths = append(f.createdPaths, sdfPath)
+	f.createdPoses = append(f.createdPoses, pose)
 	return nil
 }
 
@@ -84,13 +87,14 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	transport := &fakeTransport{}
 	ctx, cancel := context.WithCancel(context.Background())
 	readyRaw := make(chan []byte, 1)
+	wantPose := contract.Pose{X: 7.5, Y: 0.3, Z: 0.05, Yaw: math.Pi}
 	proc := Process{
 		AssetsRoot: worldsRoot,
 		ModelPath:  modelPath,
 		ReadyPath:  readyPath,
 		Transport:  transport,
 		WorldName:  "simple",
-		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
+		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: wantPose}},
 	}
 	// Cancel as soon as the ready file appears; Run blocks until ctx is done.
 	go func() {
@@ -113,6 +117,11 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	}
 	if len(transport.created) != 1 || transport.created[0] != "robot1" {
 		t.Fatalf("created=%v", transport.created)
+	}
+	// 出生位姿必须原样到 create 请求：yaw 曾经在这里被丢掉（车在 Gazebo 里朝 +x，
+	// 车端按声明的朝向去匹配，走廊里表现为"沿轴滑 2.2 m"）。
+	if len(transport.createdPoses) != 1 || transport.createdPoses[0] != wantPose {
+		t.Fatalf("created poses=%v, want %v", transport.createdPoses, wantPose)
 	}
 	if len(transport.createdPaths) != 1 {
 		t.Fatalf("created paths=%v", transport.createdPaths)

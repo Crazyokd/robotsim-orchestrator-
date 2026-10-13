@@ -1,0 +1,357 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "simenv 世界 bundle（当前架构）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "world-side",
+        "label": "世界侧",
+        "focus": [
+          "worldasset",
+          "worldproc",
+          "gz",
+          "bundle",
+          "worldinit"
+        ],
+        "note": "世界 SDF 只被世界进程消费。"
+      },
+      {
+        "id": "vehicle-side",
+        "label": "车端侧",
+        "focus": [
+          "mapasset",
+          "app",
+          "worldinit",
+          "bundle"
+        ],
+        "note": "地图、站点、初始位姿只被车端消费。"
+      },
+      {
+        "id": "acceptance",
+        "label": "验收",
+        "focus": [
+          "harness",
+          "cli",
+          "app",
+          "mapasset"
+        ],
+        "note": "显式起栈一步 + 该 bundle 声明的场景组。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "operator",
+      "type": "frontend",
+      "label": "操作员",
+      "sublabel": "人 / skill / CLI",
+      "pos": [
+        620,
+        16
+      ],
+      "size": [
+        200,
+        48
+      ]
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "simenv CLI",
+      "sublabel": "start / status / stop",
+      "pos": [
+        536,
+        88
+      ],
+      "size": [
+        368,
+        56
+      ]
+    },
+    {
+      "id": "orchestrator",
+      "type": "backend",
+      "label": "编排核",
+      "sublabel": "internal/orchestrator",
+      "pos": [
+        536,
+        168
+      ],
+      "size": [
+        368,
+        56
+      ]
+    },
+    {
+      "id": "bundle",
+      "type": "database",
+      "label": "bundle manifest",
+      "sublabel": "<world>.world.json",
+      "pos": [
+        120,
+        268
+      ],
+      "size": [
+        340,
+        56
+      ]
+    },
+    {
+      "id": "worldinit",
+      "type": "backend",
+      "label": "world init",
+      "sublabel": "读 bundle → 校验 → 灌图 → 注站点 → 放车定位",
+      "pos": [
+        760,
+        268
+      ],
+      "size": [
+        440,
+        64
+      ]
+    },
+    {
+      "id": "worldasset",
+      "type": "database",
+      "label": "世界 SDF",
+      "sublabel": "<world>.sdf · 环境镜像内",
+      "pos": [
+        80,
+        420
+      ],
+      "size": [
+        300,
+        56
+      ]
+    },
+    {
+      "id": "mapasset",
+      "type": "database",
+      "label": "地图集 map_export",
+      "sublabel": "地图主名 · 站点 · 初始位姿",
+      "pos": [
+        930,
+        420
+      ],
+      "size": [
+        340,
+        56
+      ]
+    },
+    {
+      "id": "worldproc",
+      "type": "backend",
+      "label": "simenv-world 容器",
+      "sublabel": "世界进程：spawn / clock / ready",
+      "pos": [
+        80,
+        540
+      ],
+      "size": [
+        320,
+        64
+      ]
+    },
+    {
+      "id": "app",
+      "type": "external",
+      "label": "runtime-sim 车端容器 ×N",
+      "sublabel": "地图 + 站点 + 定位",
+      "pos": [
+        930,
+        540
+      ],
+      "size": [
+        340,
+        64
+      ]
+    },
+    {
+      "id": "gz",
+      "type": "cloud",
+      "label": "Gazebo gz server",
+      "sublabel": "世界实现",
+      "pos": [
+        80,
+        660
+      ],
+      "size": [
+        280,
+        48
+      ]
+    },
+    {
+      "id": "harness",
+      "type": "external",
+      "label": "harness",
+      "sublabel": "run_worlds.sh + 场景组",
+      "pos": [
+        930,
+        660
+      ],
+      "size": [
+        300,
+        48
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "编排（本仓 internal/ + cmd/）",
+      "wraps": [
+        "cli",
+        "orchestrator",
+        "bundle",
+        "worldinit"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "世界侧（环境镜像 /opt/simenv）",
+      "wraps": [
+        "worldasset",
+        "worldproc",
+        "gz"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "车端侧（每车一个容器）",
+      "wraps": [
+        "mapasset",
+        "app"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "验收（仓库外）",
+      "wraps": [
+        "harness"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "operator-to-cli",
+      "from": "operator",
+      "to": "cli",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "cli-to-orchestrator",
+      "from": "cli",
+      "to": "orchestrator",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "orchestrator-to-bundle",
+      "from": "orchestrator",
+      "to": "bundle",
+      "label": "读 + 校验",
+      "fromSide": "left",
+      "toSide": "top"
+    },
+    {
+      "id": "orchestrator-to-worldinit",
+      "from": "orchestrator",
+      "to": "worldinit",
+      "label": "按 bundle 驱动",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "worldinit-to-worldasset",
+      "from": "worldinit",
+      "to": "worldasset",
+      "label": "世界名对齐",
+      "fromSide": "left",
+      "toSide": "top",
+      "labelDy": 8
+    },
+    {
+      "id": "worldinit-to-mapasset",
+      "from": "worldinit",
+      "to": "mapasset",
+      "label": "灌图（主名对齐）",
+      "toSide": "left",
+      "fromSide": "bottom"
+    },
+    {
+      "id": "worldasset-to-worldproc",
+      "from": "worldasset",
+      "to": "worldproc",
+      "label": "镜像内",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "worldproc-to-gz",
+      "from": "worldproc",
+      "to": "gz",
+      "label": "喂世界",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "mapasset-to-app",
+      "from": "mapasset",
+      "to": "app",
+      "label": "注入车端：站点 / 初始位姿",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "worldasset-to-mapasset",
+      "from": "worldasset",
+      "to": "mapasset",
+      "label": "origin_offset_mm · map_name（跨半断言）",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": 24
+    },
+    {
+      "id": "harness-to-app",
+      "from": "harness",
+      "to": "app",
+      "label": "跑场景组 + 断言",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两半，一个单位",
+      "items": [
+        "世界 SDF 只喂世界进程",
+        "地图 / 站点 / 初始位姿只喂车端",
+        "任一半变了，另一半必须跟着变（换世界 = 换图）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "桥",
+      "items": [
+        "origin_offset_mm：世界系 ↔ 地图系",
+        "map_name：两个命名空间的对齐点"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "跨半断言",
+      "items": [
+        "地图与 manifest 成对出现（裸世界除外）",
+        "map_name = 图主名、world = 文件名、坐标必须落在观测过的区域"
+      ]
+    }
+  ]
+}

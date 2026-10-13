@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"strings"
 	"time"
@@ -77,10 +78,14 @@ func (g GZ) waitClockWithTimeout(ctx context.Context, timeout time.Duration) err
 	}
 }
 
+// CreateEntity 在 world 里生成实体。**出生位姿只在这里给**：`create` 的 pose 会整体
+// 覆盖 SDF 里的 model pose（位置与朝向都是），所以只写 `orientation: {z: 0, w: 1}`
+// 等于把 yaw 丢掉——车在 Gazebo 里朝 +x，车端却按声明的朝向去扫描匹配，走廊里就表现为
+// "沿轴滑 2.2 m"（实测见 docs/superpowers/specs/2026-10-12-world-bundle-design.md §5.5）。
 func (g GZ) CreateEntity(ctx context.Context, world, name, sdfPath string, pose contract.Pose) error {
 	req := fmt.Sprintf(
-		`sdf_filename: "%s", name: "%s", pose: {position: {x: %g, y: %g, z: %g}, orientation: {z: 0, w: 1}}`,
-		sdfPath, name, pose.X, pose.Y, pose.Z,
+		`sdf_filename: "%s", name: "%s", pose: {position: {x: %g, y: %g, z: %g}, orientation: {x: 0, y: 0, z: %g, w: %g}}`,
+		sdfPath, name, pose.X, pose.Y, pose.Z, math.Sin(pose.Yaw/2), math.Cos(pose.Yaw/2),
 	)
 	_, err := g.run(ctx, "gz", "service", "-s", "/world/"+world+"/create",
 		"--reqtype", "gz.msgs.EntityFactory",

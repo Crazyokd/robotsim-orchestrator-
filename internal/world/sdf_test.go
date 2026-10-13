@@ -27,7 +27,7 @@ const sourceSDF = `<?xml version="1.0"?>
 `
 
 func TestRewriteNamespacesTopicsKeepsFrames(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0.5, false)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,13 +49,13 @@ func TestRewriteNamespacesTopicsKeepsFrames(t *testing.T) {
 	if strings.Contains(out, `type="camera"`) || strings.Contains(out, `type="depth_camera"`) {
 		t.Fatal("cameras must be removed")
 	}
-	if !strings.Contains(out, "0 0 0 0 0 0.5") {
-		t.Fatal("yaw pose missing")
+	if !strings.Contains(out, "<pose>0 0 0 0 0 0</pose>") {
+		t.Fatalf("model pose must stay the identity: %s", out)
 	}
 }
 
 func TestRewriteKeepsCamerasWhenAsked(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0, true)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestRewriteKeepsCamerasWhenAsked(t *testing.T) {
 }
 
 func TestRewriteTruthOdomRenamesWheelTopics(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", 0, false)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "robot1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestRewriteTruthOdomRenamesWheelTopics(t *testing.T) {
 }
 
 func TestRewriteUsesTopicPrefixSeparatelyFromModelName(t *testing.T) {
-	out, err := RewriteRobotSDF(sourceSDF, "robot1", "fleet/robot1", 0, false)
+	out, err := RewriteRobotSDF(sourceSDF, "robot1", "fleet/robot1", false)
 	if err != nil {
 		t.Fatal(err)
 	}

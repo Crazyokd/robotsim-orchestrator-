@@ -16,7 +16,11 @@ var topicTags = map[string]bool{
 // the world step, so four cameras per robot stall real time.
 const cameraUpdateRate = "5"
 
-func RewriteRobotSDF(source string, robotName, topicPrefix string, yaw float64, keepCameras bool) (string, error) {
+// RewriteRobotSDF 重写机器人 SDF：改名、改话题前缀、可选丢相机。
+//
+// **不带出生位姿**：实体在 world 里的位姿由 `create` 请求给（见 GZ.CreateEntity），SDF 里
+// 的 model pose 会被它整体覆盖，写在这里只会变成"看着像生效、其实被丢掉"的第二个来源。
+func RewriteRobotSDF(source string, robotName, topicPrefix string, keepCameras bool) (string, error) {
 	if robotName == "" {
 		return "", fmt.Errorf("robot name must not be empty")
 	}
@@ -67,7 +71,7 @@ func RewriteRobotSDF(source string, robotName, topicPrefix string, yaw float64, 
 			}
 			writeStart(&out, t)
 			if name == "model" && !poseInserted {
-				fmt.Fprintf(&out, "<pose>0 0 0 0 0 %g</pose>", yaw)
+				out.WriteString("<pose>0 0 0 0 0 0</pose>")
 				poseInserted = true
 			}
 		case xml.EndElement:

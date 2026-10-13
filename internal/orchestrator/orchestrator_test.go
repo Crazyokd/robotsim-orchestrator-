@@ -154,16 +154,20 @@ func (f *fakeWorldPort) Stop(context.Context) error {
 }
 
 type fakeVehiclePort struct {
-	session     contract.Session
-	robot       contract.Robot
-	status      AppStatus
-	started     bool
-	stopped     bool
-	startErr    error
-	readyErr    error
-	localizeErr error
-	localized   string
-	stopOrder   *[]string
+	session        contract.Session
+	robot          contract.Robot
+	status         AppStatus
+	started        bool
+	stopped        bool
+	startErr       error
+	readyErr       error
+	localizeErr    error
+	localized      string
+	localizedPose  contract.Pose
+	stationsErr    error
+	seededStations []contract.Station
+	seededMapName  string
+	stopOrder      *[]string
 }
 
 func (f *fakeVehiclePort) Start(context.Context) error {
@@ -185,18 +189,29 @@ func (f *fakeVehiclePort) Stop(context.Context) error {
 
 func (f *fakeVehiclePort) WaitReady(context.Context) error { return f.readyErr }
 
-func (f *fakeVehiclePort) Localize(_ context.Context, mapName string) error {
+func (f *fakeVehiclePort) Localize(_ context.Context, mapName string, pose contract.Pose) error {
 	f.localized = mapName
+	f.localizedPose = pose
 	return f.localizeErr
 }
 
 func (f *fakeVehiclePort) SeedMap(context.Context, []byte) error { return nil }
+
+func (f *fakeVehiclePort) SeedStations(_ context.Context, mapName string, stations []contract.Station) error {
+	if f.stationsErr != nil {
+		return f.stationsErr
+	}
+	f.seededMapName = mapName
+	f.seededStations = stations
+	return nil
+}
 
 type fakeVehicleFactory struct {
 	ports         []*fakeVehiclePort
 	failRobot     string
 	notReadyRobot string
 	localizeFails string
+	stationsFail  string
 	stopOrder     []string
 	discoverErr   error
 }
@@ -222,6 +237,9 @@ func (f *fakeVehicleFactory) New(session contract.Session, robot contract.Robot)
 	}
 	if robot.Name == f.localizeFails {
 		port.localizeErr = errors.New("localization refused")
+	}
+	if robot.Name == f.stationsFail {
+		port.stationsErr = errors.New("stations refused")
 	}
 	f.ports = append(f.ports, port)
 	return port
@@ -1038,15 +1056,38 @@ func TestStartSkipsLocalizationWhenTheWorldShipsNoMap(t *testing.T) {
 	}
 }
 
-// assetsWithWorldMap lays down the world map export for "simple".
+// assetsWithWorldMap lays down the world map export for "simple", together with
+// the bundle manifest a map is required to come with.
 func assetsWithWorldMap(t *testing.T, archive []byte) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "worlds"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "worlds", "simple.map_export"), archive, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeWorldAsset(t, dir, "simple.map_export", archive)
+	writeWorldAsset(t, dir, "simple.world.json", []byte(arenaBundleJSON("arena_world")))
 	return dir
+}
+
+// arenaBundleJSON is a bundle manifest whose map name and stations the tests
+// assert on. initial_poses 留空 -> 定位用 session 的 spawn 位姿。
+func arenaBundleJSON(mapName string) string {
+	return `{
+  "world": "simple",
+  "map_name": "` + mapName + `",
+  "origin_offset_mm": {"x": 1978.0, "y": -3181.5},
+  "stations": [
+    {"id": 4, "x": 6060, "y": 13220, "yaw": 0},
+    {"id": 7, "x": 12500, "y": 13000, "yaw": 0}
+  ],
+  "scenarios": ["s9_wide_lane_no_unlock.sh"]
+}`
+}
+
+func writeWorldAsset(t *testing.T, dir, name string, content []byte) {
+	t.Helper()
+	worlds := filepath.Join(dir, "worlds")
+	if err := os.MkdirAll(worlds, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worlds, name), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
