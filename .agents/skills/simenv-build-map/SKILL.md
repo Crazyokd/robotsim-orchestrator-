@@ -44,12 +44,33 @@ POST /api/v6/vehicle/teleop/cmd    {"linear":…,"angular":…}
 - 覆盖：每个待避区/口袋都要进到，最好两遍；**最后必须开回建图起点附近**，否则
   `mapping/stop` 返回 `913005 Robot is too far from the mapping start point`。
 
-## 3. 收图
+## 3. 收图（**四步，缺一不可**）
 
-`POST /api/v6/mapping/stop`（要 200，409 重试）→ 轮询 `GET /api/v6/mapping/status` 到 `phase=idle`
-→ 导出：`GET /api/v6/map/<name>/export` 常 404，直接 `docker cp <容器>:/sros/map` 取文件，
-按 `<world>.map_export` 的布局（`sros/map/<name>0.pgm` + json/info/lom/traj/png…）打包成 `.tar.gz`
-放进 `deploy/assets/worlds/`。
+1. `POST /api/v6/mapping/stop`（要 200，409 重试）→ 轮询 `GET /api/v6/mapping/status` 到 `phase=idle`。
+2. **生成导航资源**：`POST /api/v6/map/<name>/nav`
+   —— 有 `<name>.traj`（建图轨迹）时由轨迹 + 图**自动生成** `<name>.route.geojson`（路线图）
+   并重算 `<name>.nav.pgm`；缺轨迹则只重算 nav.pgm、沿用旧的 route.geojson。
+   **响应直接告诉你拓扑对不对**，别只看 HTTP 200：
+   ```bash
+   curl -s -X POST http://127.0.0.1:18189/api/v6/map/<name>/nav
+   # → {"data":{"filename":"corridor.nav.pgm","topology_node_count":4,"topology_edge_count":3}}
+   #   node/edge 为 0 = 拓扑没生成出来 → 图里仍然没有 route.geojson（等价于没跑这一步）
+   ```
+   **这一步以前一直漏跑**，后果是：地图只有 SLAM 侧的 `*.pgm/*.png/.lom/.info/.traj/.json`，
+   没有 `nav.pgm`、也没有 `route.geojson`。
+   （注意：起栈时车端**会自己重算 `nav.pgm`**，所以"有 nav.pgm"不代表跑过这一步；**认 `route.geojson`**。）
+3. **校验资源齐不齐**（缺任何一个都别往下走）：
+   ```bash
+   docker exec <容器> bash -lc 'ls -la /sros/map/ | grep <name>'
+   # 必须看到：<name>0.pgm(+1/2…) <name>_*.png <name>.lom <name>.info
+   #          <name>.json  <name>.traj  <name>.nav.pgm  **<name>.route.geojson**
+   ```
+4. 导出：`GET /api/v6/map/<name>/export` 常 404，直接 `docker cp <容器>:/sros/map` 取文件，
+   按 `<world>.map_export` 的布局打包成 `.tar.gz` 放进 `deploy/assets/worlds/`。
+
+> **为什么 nav.pgm / route.geojson 是硬要求**：车端 Nav2 的 `compute_route`（路线图路由）拿不到
+> `<map>.route.geojson` 就直接 `error_code:402 No route graph is available` → 任务被取消 → **车一步不动**。
+> sim 侧 `easygo_sim_bringup/route_graph.py` 只做一件事：找 `<map_dir>/<map_name>.route.geojson`。
 
 ## 4. 量偏移（world − map）——只在有特征处量
 
@@ -74,7 +95,10 @@ POST /api/v6/vehicle/teleop/cmd    {"linear":…,"angular":…}
    **声明坐标必须落在地图观测过的区域**（把站点临时挪到未观测区应当当场红，可用来自测判定力）；
 2. `./simenv start --robots 2 --world <world> --app-image …` **退出 0**，且两车上报位姿与 bundle
    声明的**地图位姿**差在容差内（实测 corridor 5~8 mm、arena 8~15 mm）；
-3. 把场景组挂进 `scenarios[]`，`bash ~/.cache/simenv-scenarios/run_worlds.sh <world>` 跑一遍。
+3. 把场景组挂进 `scenarios[]`，`bash ~/.cache/simenv-scenarios/run_worlds.sh <world>` 跑一遍；
+4. **车真的会动**：起栈后给一台车发个到站任务（`POST /api/v6/tasks` + `current/start`），确认它
+   **真的开起来**（不是"任务取消/一步不动"）。只验 start 退出 0 是不够的——图缺 `route.geojson`
+   时起栈照样成功，车却一步不动。
 
 ## 踩过的坑（真踩，按重要性）
 
@@ -86,6 +110,7 @@ POST /api/v6/vehicle/teleop/cmd    {"linear":…,"angular":…}
 | 摆位连续失败 | 车端还没挂上地图（指纹：`map_id` 为空）→ 先等它报出地图名（冷启动 2~4 min） |
 | 图糊 / 匹配分数低 | 开图时用了传送；或没开回起点就 stop |
 | 站点/位姿落在图外 | 图的覆盖没到那儿；站点必须在观测过的区域 |
+| **车一步不动 / 任务被取消**，日志 `compute_route ... error_code:402 'No route graph is available'`，且 app 刷 `feasible_area_guard: failed to load feasible area JSON` | 收图漏了 **`POST /api/v6/map/<name>/nav`** → 图里没有 `route.geojson`（也没有 `nav.pgm`）。见 §3 第 2 步 |
 
 ## 相关
 
