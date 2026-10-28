@@ -27,6 +27,8 @@
 
 SceneBroadcaster 的 `dynamic_pose_hertz=500` 仅提高真值观测频率，实测原始帧间隔 3 ms；物理步长仍为 3 ms。独立检查直接读取 Gazebo `Pose_V.header.stamp` 和完整四元数，以全车三维包围盒在地面的投影检查墙间余量。ROS truth bridge 会将 header 改写为 ROS `now()`，因此不作为连续间距证明的时间源。
 
+需要观察或录屏时，启动命令增加 `--gz-gui 1`，打开 `http://127.0.0.1:6180/vnc.html`。GUI 复用既有世界的 Scene Manager、交互视角和相机跟随插件；只加载 MinimalScene 会显示空场景。这些显示插件不改变物理模型、地图或导航配置。
+
 ## 验收门禁
 
 1. 静态检查：实体墙带 collision；所有路线和待避点连通；切断四类瓶颈后对应端点不连通，证明没有外绕通路。
