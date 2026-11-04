@@ -3,6 +3,7 @@ package world
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -112,4 +113,74 @@ func (g GZ) EntityExists(ctx context.Context, world, name string) (bool, error) 
 		}
 	}
 	return false, nil
+}
+
+// PoseInfoCommand 在世界容器里采一份 `/world/<world>/pose/info`。
+func PoseInfoCommand(world string) []string {
+	return []string{"gz", "topic", "-e", "--json-output", "-t", "/world/" + world + "/pose/info", "-n", "1"}
+}
+
+// SetPoseCommand 把实体放到世界坐标。朝向只写 yaw（与 CreateEntity 同一套四元数）。
+func SetPoseCommand(world, name string, pose contract.Pose) []string {
+	req := fmt.Sprintf(
+		`name: "%s", position: {x: %g, y: %g, z: %g}, orientation: {x: 0, y: 0, z: %g, w: %g}`,
+		name, pose.X, pose.Y, pose.Z, math.Sin(pose.Yaw/2), math.Cos(pose.Yaw/2),
+	)
+	return []string{
+		"gz", "service", "-s", "/world/" + world + "/set_pose",
+		"--reqtype", "gz.msgs.Pose",
+		"--reptype", "gz.msgs.Boolean",
+		"--timeout", "5000",
+		"--req", req,
+	}
+}
+
+type poseInfo struct {
+	Pose []struct {
+		Name     string `json:"name"`
+		Position struct {
+			X float64 `json:"x"`
+			Y float64 `json:"y"`
+			Z float64 `json:"z"`
+		} `json:"position"`
+		Orientation struct {
+			X float64 `json:"x"`
+			Y float64 `json:"y"`
+			Z float64 `json:"z"`
+			W float64 `json:"w"`
+		} `json:"orientation"`
+	} `json:"pose"`
+}
+
+// ParseEntityPose 从 pose/info JSON 取出命名实体。实体不在就失败。
+func ParseEntityPose(raw, name string) (contract.Pose, error) {
+	var info poseInfo
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		return contract.Pose{}, fmt.Errorf("decode pose info: %w", err)
+	}
+	for _, item := range info.Pose {
+		if item.Name != name {
+			continue
+		}
+		return contract.Pose{
+			X:   item.Position.X,
+			Y:   item.Position.Y,
+			Z:   item.Position.Z,
+			Yaw: yawFromQuaternion(item.Orientation.X, item.Orientation.Y, item.Orientation.Z, item.Orientation.W),
+		}, nil
+	}
+	return contract.Pose{}, fmt.Errorf("entity %s is not in pose info", name)
+}
+
+// AssertSetPoseOK 要求 set_pose 回 true。文本或 JSON 都行。
+func AssertSetPoseOK(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if strings.Contains(trimmed, "data: true") || strings.Contains(trimmed, `"data": true`) || strings.Contains(trimmed, `"data":true`) {
+		return nil
+	}
+	return fmt.Errorf("set_pose was not accepted: %s", trimmed)
+}
+
+func yawFromQuaternion(x, y, z, w float64) float64 {
+	return math.Atan2(2*(w*z+x*y), 1-2*(y*y+z*z))
 }

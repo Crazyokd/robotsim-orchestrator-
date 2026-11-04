@@ -32,6 +32,14 @@ func (f *fakeOrch) Status(context.Context) (orchestrator.Status, error) {
 	return f.status, nil
 }
 
+func (f *fakeOrch) Pose(_ context.Context, robot int) (orchestrator.EntityPose, error) {
+	return orchestrator.EntityPose{Robot: robot, Entity: contract.RobotName(robot), Pose: contract.Pose{X: 1.25, Y: -0.5, Z: 0.05}}, nil
+}
+
+func (f *fakeOrch) Reset(_ context.Context, robot int, pose contract.Pose) (orchestrator.EntityPose, error) {
+	return orchestrator.EntityPose{Robot: robot, Entity: contract.RobotName(robot), Pose: pose}, nil
+}
+
 func TestStartRequiresAppImage(t *testing.T) {
 	err := Run([]string{"start", "--robots", "1", "--world", "simple"}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
 	if err == nil {
@@ -114,5 +122,37 @@ func TestStartRejectsBadViewerRobot(t *testing.T) {
 		if err == nil {
 			t.Fatalf("--rviz %q must fail", arg)
 		}
+	}
+}
+
+func TestPosePrintsEntityLine(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"pose", "--robot", "1"}, &out, &bytes.Buffer{}, &fakeOrch{}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "robot=1 entity=robot1 x=1.25 y=-0.5 z=0.05 yaw=0\n" {
+		t.Fatalf("output=%q", out.String())
+	}
+}
+
+func TestPoseRequiresRobot(t *testing.T) {
+	if err := Run([]string{"pose"}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestResetRequiresCoordinates(t *testing.T) {
+	if err := Run([]string{"reset", "--robot", "1", "--x", "1"}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestResetPrintsWrittenPose(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"reset", "--robot", "1", "--x", "4", "--y", "0", "--yaw", "0"}, &out, &bytes.Buffer{}, &fakeOrch{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "robot=1 entity=robot1 x=4 y=0") {
+		t.Fatalf("output=%q", out.String())
 	}
 }

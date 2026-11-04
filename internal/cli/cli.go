@@ -16,11 +16,13 @@ type Runner interface {
 	Start(ctx context.Context, cfg contract.StartConfig) (orchestrator.Status, error)
 	Stop(ctx context.Context) error
 	Status(ctx context.Context) (orchestrator.Status, error)
+	Pose(ctx context.Context, robot int) (orchestrator.EntityPose, error)
+	Reset(ctx context.Context, robot int, pose contract.Pose) (orchestrator.EntityPose, error)
 }
 
 func Run(args []string, stdout, stderr io.Writer, runner Runner) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: simenv start|status|stop")
+		return fmt.Errorf("usage: simenv start|status|stop|pose|reset")
 	}
 	switch args[0] {
 	case "start":
@@ -43,6 +45,28 @@ func Run(args []string, stdout, stderr io.Writer, runner Runner) error {
 		return nil
 	case "stop":
 		return runner.Stop(context.Background())
+	case "pose":
+		robot, err := parseRobotOnly(args[1:])
+		if err != nil {
+			return err
+		}
+		pose, err := runner.Pose(context.Background(), robot)
+		if err != nil {
+			return err
+		}
+		printEntityPose(stdout, pose)
+		return nil
+	case "reset":
+		robot, pose, err := parseReset(args[1:])
+		if err != nil {
+			return err
+		}
+		got, err := runner.Reset(context.Background(), robot, pose)
+		if err != nil {
+			return err
+		}
+		printEntityPose(stdout, got)
+		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -148,6 +172,57 @@ func parsePoses(text string) ([]contract.Pose, error) {
 	return poses, nil
 }
 
+func parseRobotOnly(args []string) (int, error) {
+	fs := flag.NewFlagSet("pose", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	robot := fs.Int("robot", 0, "")
+	if err := fs.Parse(args); err != nil {
+		return 0, err
+	}
+	if *robot < 1 {
+		return 0, fmt.Errorf("robot must be >= 1")
+	}
+	return *robot, nil
+}
+
+func parseReset(args []string) (int, contract.Pose, error) {
+	fs := flag.NewFlagSet("reset", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	robot := fs.Int("robot", 0, "")
+	xSet, ySet, yawSet := false, false, false
+	var x, y, yaw, z float64
+	z = contract.DefaultSpawnZ
+	fs.Func("x", "", func(value string) error {
+		xSet = true
+		_, err := fmt.Sscanf(value, "%f", &x)
+		return err
+	})
+	fs.Func("y", "", func(value string) error {
+		ySet = true
+		_, err := fmt.Sscanf(value, "%f", &y)
+		return err
+	})
+	fs.Func("yaw", "", func(value string) error {
+		yawSet = true
+		_, err := fmt.Sscanf(value, "%f", &yaw)
+		return err
+	})
+	fs.Func("z", "", func(value string) error {
+		_, err := fmt.Sscanf(value, "%f", &z)
+		return err
+	})
+	if err := fs.Parse(args); err != nil {
+		return 0, contract.Pose{}, err
+	}
+	if *robot < 1 {
+		return 0, contract.Pose{}, fmt.Errorf("robot must be >= 1")
+	}
+	if !xSet || !ySet || !yawSet {
+		return 0, contract.Pose{}, fmt.Errorf("reset requires --x --y --yaw")
+	}
+	return *robot, contract.Pose{X: x, Y: y, Z: z, Yaw: yaw}, nil
+}
+
 func printStatus(w io.Writer, status orchestrator.Status) {
 	fmt.Fprintf(w, "world running=%t image=%s clock=%t robots=%s\n",
 		status.World.Running, status.World.Image, status.Ready.Clock, strings.Join(status.Ready.Robots, ","))
@@ -155,4 +230,9 @@ func printStatus(w io.Writer, status orchestrator.Status) {
 		fmt.Fprintf(w, "app %s running=%t api=:%d image=%s\n", app.Name, app.Running, app.APIPort, app.Image)
 	}
 	fmt.Fprintf(w, "connected=%t\n", status.Connected)
+}
+
+func printEntityPose(w io.Writer, pose orchestrator.EntityPose) {
+	fmt.Fprintf(w, "robot=%d entity=%s x=%g y=%g z=%g yaw=%g\n",
+		pose.Robot, pose.Entity, pose.Pose.X, pose.Pose.Y, pose.Pose.Z, pose.Pose.Yaw)
 }

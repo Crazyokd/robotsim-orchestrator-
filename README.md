@@ -15,6 +15,8 @@ go build -o simenv ./cmd/simenv
 docker build -f deploy/Dockerfile -t simenv-world:local .
 ./simenv start --robots 1 --world simple --app-image docker-registry.nowhere.sr/easygo/runtime-sim:<tag>
 ./simenv status
+./simenv pose --robot 1
+./simenv reset --robot 1 --x 0 --y 0 --yaw 0
 ./simenv stop
 ```
 

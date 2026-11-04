@@ -60,3 +60,39 @@ func TestWaitClockEnforcesItsOwnTimeout(t *testing.T) {
 		t.Fatalf("error=%v, want deadline exceeded", err)
 	}
 }
+
+func TestParseEntityPoseReadsNamedModel(t *testing.T) {
+	raw := `{"pose":[{"name":"robot2","position":{"x":1.5,"y":-2,"z":0.05},"orientation":{"x":0,"y":0,"z":0,"w":1}}]}`
+	pose, err := ParseEntityPose(raw, "robot2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pose.X != 1.5 || pose.Y != -2 || pose.Z != 0.05 || pose.Yaw != 0 {
+		t.Fatalf("pose=%+v", pose)
+	}
+}
+
+func TestParseEntityPoseFailsWhenNameIsMissing(t *testing.T) {
+	if _, err := ParseEntityPose(`{"pose":[{"name":"robot1"}]}`, "robot2"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestSetPoseCommandCarriesYaw(t *testing.T) {
+	cmd := SetPoseCommand("simple", "robot1", contract.Pose{X: 3, Y: 1, Z: 0.05, Yaw: math.Pi})
+	req := cmd[len(cmd)-1]
+	for _, want := range []string{`name: "robot1"`, "x: 3", "y: 1", "z: 0.05", "z: 1", "w: 6.12323399573675"} {
+		if !strings.Contains(req, want) {
+			t.Fatalf("req %q misses %q", req, want)
+		}
+	}
+}
+
+func TestAssertSetPoseOK(t *testing.T) {
+	if err := AssertSetPoseOK("data: true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AssertSetPoseOK("data: false"); err == nil {
+		t.Fatal("expected error")
+	}
+}
