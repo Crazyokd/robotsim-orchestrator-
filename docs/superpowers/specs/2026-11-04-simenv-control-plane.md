@@ -1,62 +1,60 @@
 # simenv：运行中会话的控制面
 
-> 🚧 进行中 — `pose` / `reset` 已按本合同落地；车端 `call` 尚未实现。
+> `pose` / `reset` / 通用 `call` 已按本合同落地。车端动词不进本仓。
 
-`start` / `status` / `stop` 只管生命周期。TP 要用 sim 替换 EasyGo Adapter，但不能知道容器名、端口算术或 EasyGo HTTP。车端操作从本仓**桥接出去**：对正在跑的那一份会话下令，stdout 给宿主解析。
-
-会话契约不变。`Session` 仍只有 World / Partition / Robot 清单。控制面是编排边缘，不进 `internal/contract`。
+`start` / `status` / `stop` 只管生命周期。对正在跑的会话下令走控制面，stdout 给宿主解析。会话契约不变：`Session` 只有 World / Partition / Robot。控制面不进 `internal/contract`。
 
 ## 1. 为什么
 
-- TP `@tp/adapter-sim` 只调用 `simenv`。不 `docker exec`，不打 `127.0.0.1:18189`。
-- EasyGo Adapter 继续 attach 已有容器、API `:18089`。两套 Adapter 是替换关系，启动路径不能共用。
-- 车端仍是 `--app-image` 的 `runtime-sim`。解释 EasyGo HTTP / ROS 的代码留在本仓 `EasyGoVehicle` 边缘，不进框架核。
+叶子目录属于 TP `@tp/adapter-sim`。本仓不知道 `mapping.start`，也不拆请求。Adapter 把叶子译成一段字节，写进 `call` 的标准输入。编排器按 robot 找到 `VehiclePort`，把这段字节写到那台车的连接上，再把读到的字节写回标准输出。
+
+- TP 只调用 `simenv`。不 `docker exec`，不打车端端口。
+- 位姿属于世界：`WorldPort`（现 `DockerWorld`）读写实体位姿。CLI 不出现 gz。
 
 ## 2. 命令
 
 已有：`start` `status` `stop`。
 
-新增（世界层，不解释车端）：
+世界：
 
 ```text
 simenv pose  --robot N
 simenv reset --robot N --x X --y Y --yaw YAW [--z Z]
 ```
 
-`--robot` ≥ 1，实体名 `robotN`。世界名来自正在跑的会话 `ready.json`，不另传 `--world`。`--z` 缺省用出生高度 `0.05`。非法输入直接失败。
-
-stdout 一行：
+`--robot` ≥ 1。编排器把「读/写第 N 个实体的位姿」交给 `WorldPort`。stdout 一行：
 
 ```text
 robot=1 entity=robot1 x=0.1 y=0.2 z=0.05 yaw=0.3
 ```
 
-`pose` 读 Gazebo 真值。`reset` 写 Gazebo 真值再回读。都不走车端 API。
-
-后续（车端层，仍不进 contract）：
+车端字节（不解析、不分旗标）：
 
 ```text
-simenv call --robot N --op <name> [--in JSON]
+simenv call --robot N < request
 ```
 
-`op` 是本仓边缘操作名。stdout 先 `ok=true|false`，再 `key=value` 或一段 JSON。未知 `op` 失败。第一波 HTTP/inttest 的 `op` 对照 TP 叶子，另开提交补。
+标准输入是一段完整字节，原样写到第 N 台程序的 API 连接。标准输出是从那条连接读到的字节。本仓不看 method、path、JSON，不改字段，不解 `error_code`。调用方要自己把请求写完整，并让对端在响应后关闭连接。
+
+传不出去，或车上不在会话里，才非零退出。对端返回的内容，包括失败响应，都算转发完成。
 
 ## 3. 归属
 
 | 动作 | 谁做 | 不进 |
 | --- | --- | --- |
 | 起停世界与程序 | Orchestrator | TP |
-| GZ 真值读写 | 世界容器内 `gz`，宿主 `Engine.Exec` | 车端 API、TP |
+| 读/写实体位姿 | `WorldPort`（现 `DockerWorld`） | 车端 API、TP |
 | 灌图 / 注站 / 放车 | `start` 的 world delivery | 控制面重复做一遍 |
-| 建图 / 站点 / 任务 / 定位 / 参数 | 后续 `call` → EasyGoVehicle | `internal/contract`、TP HTTP 客户端 |
-| 驾驶闭环 | 更后一波 `call` | 本波 |
+| 转发一段字节到第 N 台车 | `VehiclePort.Forward` | 解析请求、车端动词、信封、`internal/contract` |
+| 叶子目录与 HTTP 对照 | `@tp/adapter-sim` | simenv |
 
-## 4. TP 对照（第一波）
+## 4. TP 对照
 
 | simenv | `@tp/adapter-sim` |
 | --- | --- |
 | `start` / `status` / `stop` | Session + `sim.ready` |
 | `pose --robot` | `sim.pose` |
 | `reset --robot --x --y --yaw` | `sim.reset` |
+| `call --robot`，标准输入原样转发 | 叶子自己拼请求字节，自己解释响应 |
 
-叶子口 `robot` 是 ≥1 整数。Session 口仍是 `world` / `appImage` / `robots`。
+叶子口 `robot` ≥ 1。Session 口仍是 `world` / `appImage` / `robots`。

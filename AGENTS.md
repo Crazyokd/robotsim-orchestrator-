@@ -9,7 +9,7 @@
 - 两边不共享镜像、不共享 launch、不共享版本号。环境镜像不以 `runtime-sim` 为 `FROM`。运行时不挂 EasyGo 工作区。
 - **会话契约**：`Session` 只描述 World、Partition、Robot 清单；Robot 只含 `Index`、`Name`、`TopicPrefix`、`Pose`。实体与 GZ topic 前缀默认 `robotN`（N 从 1）；`GZ_IP=127.0.0.1`；`GZ_PARTITION=easygo_sim`。
 - **EasyGoVehicle 实现约定**：程序 `ROS_DOMAIN_ID=11+(N-1)`；环境若需要 ROS 则 `ROS_DOMAIN_ID=1`；HTTP `frontend=18088+100N`、`api=18089+100N`。N=1 的 API 是 `:18189`，不是旧单车 `:18089`。这些不得进入 `internal/contract` 的类型。
-- **入口**：`cmd/simenv` 宿主编排（`start` / `status` / `stop`，以及运行中会话的 `pose` / `reset`）；`cmd/simenv-world` 环境容器内世界进程。Docker Engine API 起停容器，不拼 `docker run`。控制面不进 `internal/contract`。
+- **入口**：`cmd/simenv` 宿主编排（`start` / `status` / `stop`，以及运行中会话的 `pose` / `reset` / `call`）；`cmd/simenv-world` 环境容器内世界进程。Docker Engine API 起停容器，不拼 `docker run`。控制面不进 `internal/contract`。编排器只路由：位姿交给 `WorldPort`，`call --robot` 把标准输入原样写到该车的 API 连接，再把读到的字节写回标准输出。本仓不解析这段字节，不维护车端动词表。gz 只活在 `WorldPort` 实现里。
 - 禁止 `*.sh` 业务入口、Python 编排、把 TypeScript 当本仓实现语言。不包装 `full_sim.sh` / `easygo-sim` / `sim_multi_gazebo.launch.py`。
 - 不嵌进 TP 或 EasyGo CI。操作员 skill：起停环境 `.agents/skills/simenv-run/SKILL.md`。
 - EasyGo 概念只作为程序镜像与 `VehiclePort` 边缘实现依赖，不得进入会话契约或环境实现。

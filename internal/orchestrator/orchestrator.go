@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -145,6 +146,8 @@ type WorldPort interface {
 	Ready(ctx context.Context, session contract.Session) (world.ReadyReport, error)
 	Status(ctx context.Context) (ContainerInfo, world.ReadyReport, error)
 	Stop(ctx context.Context) error
+	Pose(ctx context.Context, robot int) (EntityPose, error)
+	Reset(ctx context.Context, robot int, pose contract.Pose) (EntityPose, error)
 }
 
 type VehiclePort interface {
@@ -162,6 +165,8 @@ type VehiclePort interface {
 	// Localize puts the vehicle on the map at the given world pose (bundle 的
 	// initial_poses 优先于 session 的 spawn 位姿).
 	Localize(ctx context.Context, mapName string, pose contract.Pose) error
+	// Forward writes request to this vehicle and returns the response bytes.
+	Forward(ctx context.Context, request []byte) ([]byte, error)
 }
 
 type VehiclePortFactory interface {
@@ -522,6 +527,8 @@ type EasyGoVehicle struct {
 	ContainerName string
 	AppReady      func(ctx context.Context, apiPort int) error
 	AssetsDir     string
+	DoJSON        func(ctx context.Context, method, path string, payload []byte) ([]byte, int, error)
+	Dial          func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 func (v EasyGoVehicle) Start(ctx context.Context) error {

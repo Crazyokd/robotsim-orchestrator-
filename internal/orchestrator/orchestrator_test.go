@@ -153,6 +153,14 @@ func (f *fakeWorldPort) Stop(context.Context) error {
 	return nil
 }
 
+func (f *fakeWorldPort) Pose(context.Context, int) (EntityPose, error) {
+	return EntityPose{}, fmt.Errorf("fake world has no pose")
+}
+
+func (f *fakeWorldPort) Reset(context.Context, int, contract.Pose) (EntityPose, error) {
+	return EntityPose{}, fmt.Errorf("fake world has no reset")
+}
+
 type fakeVehiclePort struct {
 	session        contract.Session
 	robot          contract.Robot
@@ -193,6 +201,10 @@ func (f *fakeVehiclePort) Localize(_ context.Context, mapName string, pose contr
 	f.localized = mapName
 	f.localizedPose = pose
 	return f.localizeErr
+}
+
+func (f *fakeVehiclePort) Forward(context.Context, []byte) ([]byte, error) {
+	return nil, fmt.Errorf("fake vehicle has no forward")
 }
 
 func (f *fakeVehiclePort) SeedMap(context.Context, []byte) error { return nil }

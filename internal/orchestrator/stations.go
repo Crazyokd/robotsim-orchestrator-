@@ -137,6 +137,9 @@ func (v EasyGoVehicle) createStation(ctx context.Context, mapName string, statio
 
 // appJSON 调车端 API，返回响应体与状态码（非 2xx 不当作传输错误）。
 func (v EasyGoVehicle) appJSON(ctx context.Context, method, path string, payload []byte) ([]byte, int, error) {
+	if v.DoJSON != nil {
+		return v.DoJSON(ctx, method, path, payload)
+	}
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", easyGoRuntimeFor(v.Robot.Index).apiPort, path)
 	var reader io.Reader
 	if payload != nil {

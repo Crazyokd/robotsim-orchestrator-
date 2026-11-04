@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -40,8 +41,15 @@ func (f *fakeOrch) Reset(_ context.Context, robot int, pose contract.Pose) (orch
 	return orchestrator.EntityPose{Robot: robot, Entity: contract.RobotName(robot), Pose: pose}, nil
 }
 
+func (f *fakeOrch) Call(_ context.Context, robot int, request []byte) ([]byte, error) {
+	if robot != 1 {
+		return nil, fmt.Errorf("unexpected robot %d", robot)
+	}
+	return append([]byte(nil), request...), nil
+}
+
 func TestStartRequiresAppImage(t *testing.T) {
-	err := Run([]string{"start", "--robots", "1", "--world", "simple"}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
+	err := Run([]string{"start", "--robots", "1", "--world", "simple"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -50,7 +58,7 @@ func TestStartRequiresAppImage(t *testing.T) {
 func TestStartPassesConfig(t *testing.T) {
 	orch := &fakeOrch{}
 	var out bytes.Buffer
-	err := Run([]string{"start", "--robots", "1", "--world", "simple", "--app-image", "runtime-sim:v1", "--env-image", "simenv-world:local"}, &out, &bytes.Buffer{}, orch)
+	err := Run([]string{"start", "--robots", "1", "--world", "simple", "--app-image", "runtime-sim:v1", "--env-image", "simenv-world:local"}, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +71,7 @@ func TestStartPassesConfig(t *testing.T) {
 }
 
 func TestUnknownCommandFails(t *testing.T) {
-	if err := Run([]string{"logs"}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
+	if err := Run([]string{"logs"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -73,7 +81,7 @@ func TestStartParsesViewerRobotsPerFlag(t *testing.T) {
 	err := Run([]string{
 		"start", "--robots", "3", "--world", "simple", "--app-image", "runtime-sim:v1",
 		"--rviz", "1,3", "--gz-gui", "2",
-	}, &bytes.Buffer{}, &bytes.Buffer{}, orch)
+	}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, orch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +98,7 @@ func TestStartParsesCameraRobots(t *testing.T) {
 	err := Run([]string{
 		"start", "--robots", "3", "--world", "simple", "--app-image", "runtime-sim:v1",
 		"--cameras", "2,3",
-	}, &bytes.Buffer{}, &bytes.Buffer{}, orch)
+	}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, orch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +112,7 @@ func TestStartParsesCameraRobots(t *testing.T) {
 
 func TestStartDefaultsToNoViewers(t *testing.T) {
 	orch := &fakeOrch{}
-	err := Run([]string{"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1"}, &bytes.Buffer{}, &bytes.Buffer{}, orch)
+	err := Run([]string{"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, orch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +126,7 @@ func TestStartRejectsBadViewerRobot(t *testing.T) {
 		err := Run([]string{
 			"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1",
 			"--rviz", arg,
-		}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
+		}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
 		if err == nil {
 			t.Fatalf("--rviz %q must fail", arg)
 		}
@@ -127,7 +135,7 @@ func TestStartRejectsBadViewerRobot(t *testing.T) {
 
 func TestPosePrintsEntityLine(t *testing.T) {
 	var out bytes.Buffer
-	if err := Run([]string{"pose", "--robot", "1"}, &out, &bytes.Buffer{}, &fakeOrch{}); err != nil {
+	if err := Run([]string{"pose", "--robot", "1"}, bytes.NewReader(nil), &out, &bytes.Buffer{}, &fakeOrch{}); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "robot=1 entity=robot1 x=1.25 y=-0.5 z=0.05 yaw=0\n" {
@@ -136,23 +144,43 @@ func TestPosePrintsEntityLine(t *testing.T) {
 }
 
 func TestPoseRequiresRobot(t *testing.T) {
-	if err := Run([]string{"pose"}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
+	if err := Run([]string{"pose"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestResetRequiresCoordinates(t *testing.T) {
-	if err := Run([]string{"reset", "--robot", "1", "--x", "1"}, &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
+	if err := Run([]string{"reset", "--robot", "1", "--x", "1"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestResetPrintsWrittenPose(t *testing.T) {
 	var out bytes.Buffer
-	if err := Run([]string{"reset", "--robot", "1", "--x", "4", "--y", "0", "--yaw", "0"}, &out, &bytes.Buffer{}, &fakeOrch{}); err != nil {
+	if err := Run([]string{"reset", "--robot", "1", "--x", "4", "--y", "0", "--yaw", "0"}, bytes.NewReader(nil), &out, &bytes.Buffer{}, &fakeOrch{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "robot=1 entity=robot1 x=4 y=0") {
 		t.Fatalf("output=%q", out.String())
+	}
+}
+
+func TestCallWritesTheRequestBackOut(t *testing.T) {
+	request := "POST /api/v6/mapping/start HTTP/1.1\r\nHost: vehicle\r\nContent-Length: 2\r\n\r\n{}"
+	var out bytes.Buffer
+	if err := Run([]string{"call", "--robot", "1"}, strings.NewReader(request), &out, &bytes.Buffer{}, &fakeOrch{}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != request {
+		t.Fatalf("output=%q", out.String())
+	}
+}
+
+func TestCallRejectsFlagsAndAnEmptyRequest(t *testing.T) {
+	if err := Run([]string{"call", "--robot", "1", "--method", "GET"}, strings.NewReader("GET / HTTP/1.1\r\n\r\n"), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
+		t.Fatal("expected error")
+	}
+	if err := Run([]string{"call", "--robot", "1"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
+		t.Fatal("expected error")
 	}
 }

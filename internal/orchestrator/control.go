@@ -16,11 +16,19 @@ type EntityPose struct {
 }
 
 func (o Orchestrator) Pose(ctx context.Context, robot int) (EntityPose, error) {
-	ready, entity, err := o.runningEntity(ctx, robot)
+	return o.worldPort(contract.StartConfig{}).Pose(ctx, robot)
+}
+
+func (o Orchestrator) Reset(ctx context.Context, robot int, pose contract.Pose) (EntityPose, error) {
+	return o.worldPort(contract.StartConfig{}).Reset(ctx, robot, pose)
+}
+
+func (w DockerWorld) Pose(ctx context.Context, robot int) (EntityPose, error) {
+	ready, entity, err := w.runningEntity(ctx, robot)
 	if err != nil {
 		return EntityPose{}, err
 	}
-	out, err := o.engine().Exec(ctx, contract.WorldContainer, world.PoseInfoCommand(ready.World))
+	out, err := w.Engine.Exec(ctx, contract.WorldContainer, world.PoseInfoCommand(ready.World))
 	if err != nil {
 		return EntityPose{}, fmt.Errorf("read pose for %s: %w", entity, err)
 	}
@@ -31,26 +39,26 @@ func (o Orchestrator) Pose(ctx context.Context, robot int) (EntityPose, error) {
 	return EntityPose{Robot: robot, Entity: entity, Pose: pose}, nil
 }
 
-func (o Orchestrator) Reset(ctx context.Context, robot int, pose contract.Pose) (EntityPose, error) {
-	ready, entity, err := o.runningEntity(ctx, robot)
+func (w DockerWorld) Reset(ctx context.Context, robot int, pose contract.Pose) (EntityPose, error) {
+	ready, entity, err := w.runningEntity(ctx, robot)
 	if err != nil {
 		return EntityPose{}, err
 	}
-	out, err := o.engine().Exec(ctx, contract.WorldContainer, world.SetPoseCommand(ready.World, entity, pose))
+	out, err := w.Engine.Exec(ctx, contract.WorldContainer, world.SetPoseCommand(ready.World, entity, pose))
 	if err != nil {
 		return EntityPose{}, fmt.Errorf("reset %s: %w", entity, err)
 	}
 	if err := world.AssertSetPoseOK(out); err != nil {
 		return EntityPose{}, fmt.Errorf("reset %s: %w", entity, err)
 	}
-	return o.Pose(ctx, robot)
+	return w.Pose(ctx, robot)
 }
 
-func (o Orchestrator) runningEntity(ctx context.Context, robot int) (world.ReadyReport, string, error) {
+func (w DockerWorld) runningEntity(ctx context.Context, robot int) (world.ReadyReport, string, error) {
 	if robot < 1 {
 		return world.ReadyReport{}, "", fmt.Errorf("robot index must be >= 1")
 	}
-	ready, err := readReady(ctx, o.engine())
+	ready, err := readReady(ctx, w.Engine)
 	if err != nil {
 		return world.ReadyReport{}, "", err
 	}
@@ -62,8 +70,4 @@ func (o Orchestrator) runningEntity(ctx context.Context, robot int) (world.Ready
 		return world.ReadyReport{}, "", fmt.Errorf("entity %s is not in the running session", entity)
 	}
 	return ready, entity, nil
-}
-
-func (o Orchestrator) engine() Engine {
-	return o.Engine
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -18,11 +19,12 @@ type Runner interface {
 	Status(ctx context.Context) (orchestrator.Status, error)
 	Pose(ctx context.Context, robot int) (orchestrator.EntityPose, error)
 	Reset(ctx context.Context, robot int, pose contract.Pose) (orchestrator.EntityPose, error)
+	Call(ctx context.Context, robot int, request []byte) ([]byte, error)
 }
 
-func Run(args []string, stdout, stderr io.Writer, runner Runner) error {
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: simenv start|status|stop|pose|reset")
+		return fmt.Errorf("usage: simenv start|status|stop|pose|reset|call")
 	}
 	switch args[0] {
 	case "start":
@@ -67,6 +69,24 @@ func Run(args []string, stdout, stderr io.Writer, runner Runner) error {
 		}
 		printEntityPose(stdout, got)
 		return nil
+	case "call":
+		robot, err := parseCall(args[1:])
+		if err != nil {
+			return err
+		}
+		request, err := io.ReadAll(stdin)
+		if err != nil {
+			return err
+		}
+		if len(bytes.TrimSpace(request)) == 0 {
+			return fmt.Errorf("request is empty")
+		}
+		response, err := runner.Call(context.Background(), robot, request)
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(response)
+		return err
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -235,4 +255,20 @@ func printStatus(w io.Writer, status orchestrator.Status) {
 func printEntityPose(w io.Writer, pose orchestrator.EntityPose) {
 	fmt.Fprintf(w, "robot=%d entity=%s x=%g y=%g z=%g yaw=%g\n",
 		pose.Robot, pose.Entity, pose.Pose.X, pose.Pose.Y, pose.Pose.Z, pose.Pose.Yaw)
+}
+
+func parseCall(args []string) (int, error) {
+	fs := flag.NewFlagSet("call", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	robot := fs.Int("robot", 0, "")
+	if err := fs.Parse(args); err != nil {
+		return 0, err
+	}
+	if *robot < 1 {
+		return 0, fmt.Errorf("robot must be >= 1")
+	}
+	if fs.NArg() != 0 {
+		return 0, fmt.Errorf("call only accepts --robot")
+	}
+	return *robot, nil
 }

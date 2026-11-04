@@ -17,6 +17,8 @@ docker build -f deploy/Dockerfile -t simenv-world:local .
 ./simenv status
 ./simenv pose --robot 1
 ./simenv reset --robot 1 --x 0 --y 0 --yaw 0
+# 标准输入是已经拼好的请求字节，标准输出是车端回的字节
+./simenv call --robot 1 < request.bin
 ./simenv stop
 ```
 
