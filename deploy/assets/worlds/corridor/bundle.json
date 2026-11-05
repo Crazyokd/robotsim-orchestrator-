@@ -1,0 +1,49 @@
+{
+  "world": "corridor",
+  "stations": [
+    {
+      "id": 1,
+      "x": -14.0,
+      "y": 1.2,
+      "yaw": 0.0
+    },
+    {
+      "id": 2,
+      "x": 14.0,
+      "y": -1.0,
+      "yaw": 0.0
+    }
+  ],
+  "initial_poses": [
+    {
+      "index": 1,
+      "x": -14.0,
+      "y": 1.2,
+      "z": 0.05,
+      "yaw": 0
+    },
+    {
+      "index": 2,
+      "x": 14.0,
+      "y": -1.0,
+      "z": 0.05,
+      "yaw": 3.1415927
+    }
+  ],
+  "worlds": {
+    "gazebo": {
+      "sdf": "gazebo/world.sdf"
+    }
+  },
+  "vehicles": {
+    "easygo": {
+      "map_export": "easygo/corridor.map_export",
+      "map_name": "corridor",
+      "origin_offset_mm": {
+        "x": -288.0,
+        "y": 454.0
+      }
+    }
+  },
+  "source_sha": "05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1"
+}

@@ -6,13 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"strconv"
+	"sort"
 	"strings"
+	"time"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/orchestrator"
 )
+
+// startTimeout 给一次 start 的总预算：世界拉起、车辆就绪、world init 任一
+// 环节挂住都必须以失败收场，而不是无限等。
+const startTimeout = 10 * time.Minute
 
 type Runner interface {
 	Start(ctx context.Context, cfg contract.StartConfig) (orchestrator.Status, error)
@@ -23,17 +27,21 @@ type Runner interface {
 	Call(ctx context.Context, robot int, request []byte) ([]byte, error)
 }
 
-func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner) error {
+// Run 跑 CLI。registerStartFlags 是各 Port 的 RegisterFlags（组合根传入）：
+// 它们把实现参数挂到 start 的 FlagSet 上——CLI 自己只认识世界与机器人。
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner, registerStartFlags ...func(*flag.FlagSet)) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: simenv start|status|stop|pose|reset|call")
 	}
 	switch args[0] {
 	case "start":
-		cfg, err := parseStart(args[1:])
+		cfg, err := parseStart(args[1:], registerStartFlags)
 		if err != nil {
 			return err
 		}
-		status, err := runner.Start(context.Background(), cfg)
+		ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
+		defer cancel()
+		status, err := runner.Start(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -93,75 +101,29 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner
 	}
 }
 
-func parseStart(args []string) (contract.StartConfig, error) {
+// parseStart 解析 start 的参数：框架只有 --world / --robots / --poses，
+// 其余 flag 由各 Port 的 RegisterFlags 挂上来、parse 时直接填进它们的 Options。
+func parseStart(args []string, registerFlags []func(*flag.FlagSet)) (contract.StartConfig, error) {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	robots := fs.Int("robots", 1, "")
-	worldName := fs.String("world", contract.DefaultWorld, "")
-	appImage := fs.String("app-image", "", "")
-	envImage := fs.String("env-image", contract.DefaultEnvImage, "")
-	partition := fs.String("partition", contract.DefaultPartition, "")
-	dataRoot := fs.String("data-root", "", "")
-	dataVolumePrefix := fs.String("data-volume-prefix", os.Getenv("SIMENV_DATA_VOLUME_PREFIX"), "")
+	worldName := fs.String("world", "", "")
 	posesText := fs.String("poses", "", "")
-	rvizText := fs.String("rviz", "", "")
-	gzGuiText := fs.String("gz-gui", "", "")
-	camerasText := fs.String("cameras", "", "")
+	for _, register := range registerFlags {
+		register(fs)
+	}
 	if err := fs.Parse(args); err != nil {
 		return contract.StartConfig{}, err
-	}
-	if strings.TrimSpace(*appImage) == "" {
-		return contract.StartConfig{}, fmt.Errorf("app-image must not be empty")
 	}
 	poses, err := parsePoses(*posesText)
 	if err != nil {
 		return contract.StartConfig{}, err
 	}
-	rvizRobots, err := parseRobotIndices("rviz", *rvizText)
-	if err != nil {
-		return contract.StartConfig{}, err
-	}
-	gzGuiRobots, err := parseRobotIndices("gz-gui", *gzGuiText)
-	if err != nil {
-		return contract.StartConfig{}, err
-	}
-	cameraRobots, err := parseRobotIndices("cameras", *camerasText)
-	if err != nil {
-		return contract.StartConfig{}, err
-	}
 	return contract.StartConfig{
-		Robots:           *robots,
-		World:            *worldName,
-		AppImage:         *appImage,
-		EnvImage:         *envImage,
-		Partition:        *partition,
-		DataRoot:         *dataRoot,
-		DataVolumePrefix: *dataVolumePrefix,
-		Poses:            poses,
-		RvizRobots:       rvizRobots,
-		GzGuiRobots:      gzGuiRobots,
-		CameraRobots:     cameraRobots,
+		Robots: *robots,
+		World:  *worldName,
+		Poses:  poses,
 	}, nil
-}
-
-func parseRobotIndices(flag, text string) ([]int, error) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil, nil
-	}
-	var indices []int
-	for _, part := range strings.Split(text, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		index, err := strconv.Atoi(part)
-		if err != nil || index < 1 {
-			return nil, fmt.Errorf("%s robot %q is not a positive index", flag, part)
-		}
-		indices = append(indices, index)
-	}
-	return indices, nil
 }
 
 func parsePoses(text string) ([]contract.Pose, error) {
@@ -247,12 +209,30 @@ func parseReset(args []string) (int, contract.Pose, error) {
 }
 
 func printStatus(w io.Writer, status orchestrator.Status) {
-	fmt.Fprintf(w, "world running=%t image=%s clock=%t robots=%s\n",
-		status.World.Running, status.World.Image, status.Ready.Clock, strings.Join(status.Ready.Robots, ","))
-	for _, app := range status.Apps {
-		fmt.Fprintf(w, "app %s running=%t api=:%d image=%s\n", app.Name, app.Running, app.APIPort, app.Image)
+	fmt.Fprintf(w, "world running=%t robots=%s%s\n",
+		status.World.Running, strings.Join(status.World.Ready.Robots, ","), formatDetail(status.World.Detail))
+	for _, vehicle := range status.Vehicles {
+		fmt.Fprintf(w, "vehicle %s running=%t endpoint=%s%s\n",
+			vehicle.Name, vehicle.Running, vehicle.Endpoint, formatDetail(vehicle.Detail))
 	}
 	fmt.Fprintf(w, "connected=%t\n", status.Connected)
+}
+
+// formatDetail 原样打印实现专属的 Detail（键排序，输出稳定）。
+func formatDetail(detail map[string]string) string {
+	if len(detail) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(detail))
+	for key := range detail {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&b, " %s=%s", key, detail[key])
+	}
+	return b.String()
 }
 
 func printEntityPose(w io.Writer, pose orchestrator.EntityPose) {

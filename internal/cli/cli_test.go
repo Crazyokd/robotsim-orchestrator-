@@ -3,13 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"flag"
 	"fmt"
 	"strings"
 	"testing"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/orchestrator"
-	"git.standard-robots.com/yicao/sim/internal/world"
 )
 
 type fakeOrch struct {
@@ -20,9 +20,16 @@ type fakeOrch struct {
 func (f *fakeOrch) Start(_ context.Context, cfg contract.StartConfig) (orchestrator.Status, error) {
 	f.started = cfg
 	return orchestrator.Status{
-		World:     orchestrator.ContainerInfo{Name: contract.WorldContainer, Running: true, Image: cfg.EnvImage},
-		Apps:      []orchestrator.AppStatus{{Name: "simenv-robot1", Running: true, APIPort: 18189, Image: cfg.AppImage}},
-		Ready:     world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1"}},
+		World: orchestrator.WorldStatus{
+			Present: true,
+			Running: true,
+			Detail:  map[string]string{"image": "env"},
+			Ready:   orchestrator.WorldReady{World: "map_world", Robots: []string{"robot1"}},
+		},
+		Vehicles: []orchestrator.VehicleStatus{{
+			Name: "robot1", Running: true, Endpoint: "http://127.0.0.1:18189",
+			Detail: map[string]string{"image": "runtime"},
+		}},
 		Connected: true,
 	}, nil
 }
@@ -48,88 +55,52 @@ func (f *fakeOrch) Call(_ context.Context, robot int, request []byte) ([]byte, e
 	return append([]byte(nil), request...), nil
 }
 
-func TestStartRequiresAppImage(t *testing.T) {
-	err := Run([]string{"start", "--robots", "1", "--world", "simple"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
-	if err == nil {
-		t.Fatal("expected error")
+// fakePortFlags 扮演 Port 的 RegisterFlags：证明 start 的 FlagSet 对组合根开放。
+func fakePortFlags(target *string) func(*flag.FlagSet) {
+	return func(fs *flag.FlagSet) {
+		fs.StringVar(target, "app-image", "", "")
 	}
 }
 
 func TestStartPassesConfig(t *testing.T) {
 	orch := &fakeOrch{}
 	var out bytes.Buffer
-	err := Run([]string{"start", "--robots", "1", "--world", "simple", "--app-image", "runtime-sim:v1", "--env-image", "simenv-world:local"}, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch)
+	var appImage string
+	err := Run([]string{
+		"start", "--robots", "1", "--world", "simple",
+		"--poses", "7,8,1.5", "--app-image", "runtime-sim:v1",
+	}, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch, fakePortFlags(&appImage))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if orch.started.AppImage != "runtime-sim:v1" || orch.started.World != "simple" {
+	if orch.started.World != "simple" || orch.started.Robots != 1 {
 		t.Fatalf("cfg=%+v", orch.started)
 	}
-	if !strings.Contains(out.String(), "18189") {
+	if len(orch.started.Poses) != 1 || orch.started.Poses[0] != (contract.Pose{X: 7, Y: 8, Z: contract.DefaultSpawnZ, Yaw: 1.5}) {
+		t.Fatalf("poses=%+v", orch.started.Poses)
+	}
+	// Port 的 flag 不经 CLI 的手，直接填进 Port 的 Options。
+	if appImage != "runtime-sim:v1" {
+		t.Fatalf("app-image=%q", appImage)
+	}
+	if !strings.Contains(out.String(), "endpoint=http://127.0.0.1:18189") {
 		t.Fatalf("output=%s", out.String())
+	}
+	if !strings.Contains(out.String(), "image=runtime") {
+		t.Fatalf("detail must be printed verbatim: %s", out.String())
+	}
+}
+
+func TestStartRejectsAnUnknownFlag(t *testing.T) {
+	err := Run([]string{"start", "--world", "simple", "--app-image", "x"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
+	if err == nil {
+		t.Fatal("flags a port did not register must fail")
 	}
 }
 
 func TestUnknownCommandFails(t *testing.T) {
 	if err := Run([]string{"logs"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-func TestStartParsesViewerRobotsPerFlag(t *testing.T) {
-	orch := &fakeOrch{}
-	err := Run([]string{
-		"start", "--robots", "3", "--world", "simple", "--app-image", "runtime-sim:v1",
-		"--rviz", "1,3", "--gz-gui", "2",
-	}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, orch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(orch.started.RvizRobots) != 2 || orch.started.RvizRobots[0] != 1 || orch.started.RvizRobots[1] != 3 {
-		t.Fatalf("rviz robots=%v", orch.started.RvizRobots)
-	}
-	if len(orch.started.GzGuiRobots) != 1 || orch.started.GzGuiRobots[0] != 2 {
-		t.Fatalf("gz-gui robots=%v", orch.started.GzGuiRobots)
-	}
-}
-
-func TestStartParsesCameraRobots(t *testing.T) {
-	orch := &fakeOrch{}
-	err := Run([]string{
-		"start", "--robots", "3", "--world", "simple", "--app-image", "runtime-sim:v1",
-		"--cameras", "2,3",
-	}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, orch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(orch.started.CameraRobots) != 2 || orch.started.CameraRobots[0] != 2 || orch.started.CameraRobots[1] != 3 {
-		t.Fatalf("camera robots=%v", orch.started.CameraRobots)
-	}
-	if orch.started.WantsCameras(1) || !orch.started.WantsCameras(2) {
-		t.Fatal("WantsCameras mismatch")
-	}
-}
-
-func TestStartDefaultsToNoViewers(t *testing.T) {
-	orch := &fakeOrch{}
-	err := Run([]string{"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, orch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(orch.started.RvizRobots) != 0 || len(orch.started.GzGuiRobots) != 0 || len(orch.started.CameraRobots) != 0 {
-		t.Fatalf("viewers=%v/%v cameras=%v", orch.started.RvizRobots, orch.started.GzGuiRobots, orch.started.CameraRobots)
-	}
-}
-
-func TestStartRejectsBadViewerRobot(t *testing.T) {
-	for _, arg := range []string{"0", "-1", "robot1", "1,x"} {
-		err := Run([]string{
-			"start", "--robots", "2", "--world", "simple", "--app-image", "runtime-sim:v1",
-			"--rviz", arg,
-		}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{})
-		if err == nil {
-			t.Fatalf("--rviz %q must fail", arg)
-		}
 	}
 }
 
@@ -182,30 +153,5 @@ func TestCallRejectsFlagsAndAnEmptyRequest(t *testing.T) {
 	}
 	if err := Run([]string{"call", "--robot", "1"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-func TestStartParsesDataVolumePrefix(t *testing.T) {
-	orch := &fakeOrch{}
-	var out bytes.Buffer
-	args := []string{"start", "--robots", "1", "--world", "simple", "--app-image", "runtime-sim:v1", "--data-volume-prefix", "ci-9"}
-	if err := Run(args, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch); err != nil {
-		t.Fatal(err)
-	}
-	if orch.started.DataVolumePrefix != "ci-9" {
-		t.Fatalf("cfg=%+v", orch.started)
-	}
-}
-
-func TestStartDataVolumePrefixDefaultsFromEnv(t *testing.T) {
-	t.Setenv("SIMENV_DATA_VOLUME_PREFIX", "ci-env-1")
-	orch := &fakeOrch{}
-	var out bytes.Buffer
-	args := []string{"start", "--robots", "1", "--world", "simple", "--app-image", "runtime-sim:v1"}
-	if err := Run(args, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch); err != nil {
-		t.Fatal(err)
-	}
-	if orch.started.DataVolumePrefix != "ci-env-1" {
-		t.Fatalf("cfg=%+v", orch.started)
 	}
 }

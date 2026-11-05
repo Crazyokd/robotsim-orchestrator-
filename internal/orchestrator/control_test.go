@@ -2,30 +2,37 @@ package orchestrator
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
 )
 
-func TestPoseReadsNamedEntityFromTheWorldContainer(t *testing.T) {
-	engine := &controlEngine{
-		ready: `{"world":"simple","clock":true,"robots":["robot1"]}`,
-		exec: func(_ context.Context, name string, cmd []string) (string, error) {
-			joined := strings.Join(cmd, " ")
-			if name != contract.WorldContainer {
-				t.Fatalf("exec target %s", name)
-			}
-			if strings.Contains(joined, contract.WorldReadyPath) {
-				return `{"world":"simple","clock":true,"robots":["robot1"]}`, nil
-			}
-			if !strings.Contains(joined, "/world/simple/pose/info") {
-				t.Fatalf("cmd=%v", cmd)
-			}
-			return `{"pose":[{"name":"robot1","position":{"x":2,"y":3,"z":0.05},"orientation":{"x":0,"y":0,"z":0,"w":1}}]}`, nil
-		},
-	}
-	got, err := (Orchestrator{Engine: engine}).Pose(context.Background(), 1)
+// 编排器的 pose/reset 只路由：世界 Port 怎么读位姿是它自己的事
+// （命令断言在世界 Port 包里）。
+type routingWorldPort struct {
+	fakeWorldPort
+	poseRobot  int
+	resetRobot int
+	resetPose  contract.Pose
+	pose       EntityPose
+	poseErr    error
+}
+
+func (f *routingWorldPort) Pose(_ context.Context, robot int) (EntityPose, error) {
+	f.poseRobot = robot
+	return f.pose, f.poseErr
+}
+
+func (f *routingWorldPort) Reset(_ context.Context, robot int, pose contract.Pose) (EntityPose, error) {
+	f.resetRobot = robot
+	f.resetPose = pose
+	return f.pose, f.poseErr
+}
+
+func TestPoseRoutesToTheWorldPort(t *testing.T) {
+	worldPort := &routingWorldPort{pose: EntityPose{Robot: 1, Entity: "robot1", Pose: contract.Pose{X: 2, Y: 3, Z: 0.05}}}
+	got, err := (Orchestrator{World: worldPort}).Pose(context.Background(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,61 +41,30 @@ func TestPoseReadsNamedEntityFromTheWorldContainer(t *testing.T) {
 	}
 }
 
-func TestPoseFailsWhenRobotIsNotInSession(t *testing.T) {
-	engine := &controlEngine{ready: `{"world":"simple","clock":true,"robots":["robot1"]}`}
-	if _, err := (Orchestrator{Engine: engine}).Pose(context.Background(), 2); err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestResetWritesThenReadsPose(t *testing.T) {
-	var sawSet bool
-	engine := &controlEngine{
-		exec: func(_ context.Context, _ string, cmd []string) (string, error) {
-			joined := strings.Join(cmd, " ")
-			if strings.Contains(joined, contract.WorldReadyPath) {
-				return `{"world":"simple","clock":true,"robots":["robot1"]}`, nil
-			}
-			if strings.Contains(joined, "/set_pose") {
-				sawSet = true
-				if !strings.Contains(joined, `name: "robot1"`) || !strings.Contains(joined, "x: 4") {
-					t.Fatalf("set cmd=%v", cmd)
-				}
-				return "data: true", nil
-			}
-			return `{"pose":[{"name":"robot1","position":{"x":4,"y":0,"z":0.05},"orientation":{"x":0,"y":0,"z":0,"w":1}}]}`, nil
-		},
-	}
-	got, err := (Orchestrator{Engine: engine}).Reset(context.Background(), 1, contract.Pose{X: 4, Z: contract.DefaultSpawnZ})
+func TestResetRoutesToTheWorldPort(t *testing.T) {
+	worldPort := &routingWorldPort{pose: EntityPose{Robot: 1, Entity: "robot1", Pose: contract.Pose{X: 4, Z: contract.DefaultSpawnZ}}}
+	got, err := (Orchestrator{World: worldPort}).Reset(context.Background(), 1, contract.Pose{X: 4, Z: contract.DefaultSpawnZ})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sawSet || got.Pose.X != 4 {
-		t.Fatalf("sawSet=%t got=%+v", sawSet, got)
+	if worldPort.resetRobot != 1 || worldPort.resetPose.X != 4 {
+		t.Fatalf("routed reset=%d %+v", worldPort.resetRobot, worldPort.resetPose)
+	}
+	if got.Pose.X != 4 {
+		t.Fatalf("got=%+v", got)
 	}
 }
 
-type controlEngine struct {
-	ready string
-	exec  func(context.Context, string, []string) (string, error)
+func TestPosePropagatesTheWorldError(t *testing.T) {
+	poseErr := errors.New("entity is not in the running session")
+	worldPort := &routingWorldPort{poseErr: poseErr}
+	if _, err := (Orchestrator{World: worldPort}).Pose(context.Background(), 2); !errors.Is(err, poseErr) {
+		t.Fatalf("error=%v, want %v", err, poseErr)
+	}
 }
 
-func (c *controlEngine) ImageID(context.Context, string) (string, error) { return "", nil }
-func (c *controlEngine) ReadImageFile(context.Context, string, string) ([]byte, error) {
-	return nil, nil
-}
-func (c *controlEngine) Start(context.Context, ContainerSpec) error { return nil }
-func (c *controlEngine) Stop(context.Context, string) error         { return nil }
-func (c *controlEngine) Inspect(context.Context, string) (ContainerInfo, error) {
-	return ContainerInfo{}, nil
-}
-func (c *controlEngine) List(context.Context) ([]ContainerInfo, error) { return nil, nil }
-func (c *controlEngine) Exec(ctx context.Context, name string, cmd []string) (string, error) {
-	if c.exec != nil {
-		return c.exec(ctx, name, cmd)
+func TestPoseFailsWithoutAWorldPort(t *testing.T) {
+	if _, err := (Orchestrator{}).Pose(context.Background(), 1); err == nil {
+		t.Fatal("expected error")
 	}
-	if strings.Contains(strings.Join(cmd, " "), contract.WorldReadyPath) {
-		return c.ready, nil
-	}
-	return "", nil
 }

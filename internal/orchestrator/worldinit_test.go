@@ -2,86 +2,102 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
+	"git.standard-robots.com/yicao/sim/internal/assets"
 	"git.standard-robots.com/yicao/sim/internal/contract"
-	"git.standard-robots.com/yicao/sim/internal/world"
 )
 
-// world init 把 bundle 落成运行态：地图 → 站点 → 定位，缺一不可。
-func TestStartSeedsBundleStationsAndLocalizes(t *testing.T) {
-	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
+// world init 把 bundle 落成运行态：每台车一次 Provision，框架不解释内容。
+// 交给车端的站点是世界系 m / rad，换算成车端坐标系是车端 Port 的事。
+func TestStartProvisionsEveryVehicleFromTheBundle(t *testing.T) {
 	worldPort := &fakeWorldPort{}
 	vehicleFactory := &fakeVehicleFactory{}
-	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: assetsWithWorldMap(t, archive)}
+	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: assetsWithBundle(t)}
 	if _, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 2, World: "simple", AppImage: "runtime", EnvImage: "env",
+		Robots: 2, World: "simple",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, port := range vehicleFactory.ports {
-		if port.seededMapName != "arena_world" {
-			t.Fatalf("%s seeded stations on map %q", port.robot.Name, port.seededMapName)
+	for i, port := range vehicleFactory.ports {
+		if len(port.provisioned) != 1 {
+			t.Fatalf("%s provisioned %d times", port.robot.Name, len(port.provisioned))
 		}
-		if len(port.seededStations) != 2 {
-			t.Fatalf("%s seeded %d stations", port.robot.Name, len(port.seededStations))
+		provisioning := port.provisioned[0]
+		if len(provisioning.Stations) != 2 {
+			t.Fatalf("%s got %d stations", port.robot.Name, len(provisioning.Stations))
 		}
-		if port.seededStations[0] != (contract.Station{ID: 4, X: 6060, Y: 13220, Yaw: 0}) {
-			t.Fatalf("%s station 4 = %+v", port.robot.Name, port.seededStations[0])
+		if provisioning.Stations[0] != (assets.Station{ID: 4, X: 8.038, Y: 10.0385, Yaw: 0}) {
+			t.Fatalf("%s station 4 = %+v", port.robot.Name, provisioning.Stations[0])
 		}
-		if port.localized != "arena_world" {
-			t.Fatalf("%s localized on %q", port.robot.Name, port.localized)
+		if provisioning.Pose != worldPort.started[0].Robots[i].Pose {
+			t.Fatalf("%s pose %+v != session pose %+v", port.robot.Name, provisioning.Pose, worldPort.started[0].Robots[i].Pose)
 		}
 	}
 }
 
-func TestStartUsesBundleInitialPosesWhenDeclared(t *testing.T) {
-	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
+// bundle 按车端 kind 分发节：缺节即失败——世界换了而车端节没跟上，宁可启动失败。
+func TestStartFailsWhenTheBundleHasNoSectionForTheVehicleKind(t *testing.T) {
 	dir := t.TempDir()
-	writeWorldAsset(t, dir, "simple.map_export", archive)
-	writeWorldAsset(t, dir, "simple.world.json", []byte(`{
+	writeWorldBundle(t, dir, "simple", `{
   "world": "simple",
-  "map_name": "arena_world",
-  "origin_offset_mm": {"x": 0, "y": 0},
+  "stations": [],
+  "worlds": {},
+  "vehicles": {"other-vehicle": {}}
+}`)
+	orch := Orchestrator{World: &fakeWorldPort{}, VehicleFactory: &fakeVehicleFactory{}, assetsDir: dir}
+	_, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 1, World: "simple",
+	})
+	if err == nil || !strings.Contains(err.Error(), "has no vehicles.fake section") {
+		t.Fatalf("expected a missing-section error, got %v", err)
+	}
+}
+
+func TestStartUsesBundleInitialPosesWhenDeclared(t *testing.T) {
+	dir := t.TempDir()
+	writeWorldBundle(t, dir, "simple", `{
+  "world": "simple",
   "stations": [],
   "initial_poses": [
     {"index": 1, "x": 1.5, "y": 2.5, "z": 0.1, "yaw": 1.57},
     {"index": 2, "x": -1.5, "y": -2.5, "z": 0.1, "yaw": 0}
   ],
-  "scenarios": ["s1.sh"]
-}`))
+  "worlds": {},
+  "vehicles": {"fake": {}}
+}`)
 	worldPort := &fakeWorldPort{}
 	vehicleFactory := &fakeVehicleFactory{}
 	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: dir}
 	if _, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 2, World: "simple", AppImage: "runtime", EnvImage: "env",
+		Robots: 2, World: "simple",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := vehicleFactory.ports[0].localizedPose; got != (contract.Pose{X: 1.5, Y: 2.5, Z: 0.1, Yaw: 1.57}) {
-		t.Fatalf("robot1 localized at %+v, want the bundle's initial pose", got)
+	// bundle 的 initial_poses 既喂世界 spawn（session），也喂车端出生位姿——同一份。
+	if got := worldPort.started[0].Robots[0].Pose; got != (contract.Pose{X: 1.5, Y: 2.5, Z: 0.1, Yaw: 1.57}) {
+		t.Fatalf("robot1 spawned at %+v, want the bundle's initial pose", got)
 	}
-	if got := vehicleFactory.ports[1].localizedPose; got != (contract.Pose{X: -1.5, Y: -2.5, Z: 0.1}) {
-		t.Fatalf("robot2 localized at %+v, want the bundle's initial pose", got)
+	if got := vehicleFactory.ports[0].provisioned[0].Pose; got != (contract.Pose{X: 1.5, Y: 2.5, Z: 0.1, Yaw: 1.57}) {
+		t.Fatalf("robot1 provisioned at %+v, want the bundle's initial pose", got)
+	}
+	if got := vehicleFactory.ports[1].provisioned[0].Pose; got != (contract.Pose{X: -1.5, Y: -2.5, Z: 0.1}) {
+		t.Fatalf("robot2 provisioned at %+v, want the bundle's initial pose", got)
 	}
 }
 
-func TestStartFailsWhenTheWorldShipsAMapWithoutABundle(t *testing.T) {
-	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
+// 目录里躺着资产却没有 manifest 是错误：bundle 已不完整，宁可失败也不猜。
+func TestStartFailsWhenTheWorldShipsAssetsButNoBundle(t *testing.T) {
 	dir := t.TempDir()
-	writeWorldAsset(t, dir, "simple.map_export", archive)
+	writeWorldFile(t, dir, "simple", "stray.map_export", []byte("archive"))
 	worldPort := &fakeWorldPort{}
 	vehicleFactory := &fakeVehicleFactory{}
 	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: dir}
 	_, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
+		Robots: 1, World: "simple",
 	})
-	if err == nil || !strings.Contains(err.Error(), "ships a map but no simple.world.json bundle") {
+	if err == nil || !strings.Contains(err.Error(), "ships assets but no bundle.json manifest") {
 		t.Fatalf("expected missing-bundle error, got %v", err)
 	}
 	if len(vehicleFactory.ports) != 0 {
@@ -89,145 +105,33 @@ func TestStartFailsWhenTheWorldShipsAMapWithoutABundle(t *testing.T) {
 	}
 }
 
-func TestStartFailsWhenTheBundleDeclaresAnotherMap(t *testing.T) {
-	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
-	dir := t.TempDir()
-	writeWorldAsset(t, dir, "simple.map_export", archive)
-	writeWorldAsset(t, dir, "simple.world.json", []byte(arenaBundleJSON("other_world")))
-	worldPort := &fakeWorldPort{}
-	vehicleFactory := &fakeVehicleFactory{}
-	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: dir}
-	_, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
-	})
-	if err == nil || !strings.Contains(err.Error(), `holds "arena_world" but bundle declares "other_world"`) {
-		t.Fatalf("expected map-name mismatch, got %v", err)
-	}
-	if vehicleFactory.ports[0].localized != "" {
-		t.Fatal("vehicle localized despite the bundle mismatch")
-	}
-}
-
 func TestStartFailsWhenTheBundleIsForAnotherWorld(t *testing.T) {
-	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
 	dir := t.TempDir()
-	writeWorldAsset(t, dir, "simple.map_export", archive)
-	writeWorldAsset(t, dir, "simple.world.json", []byte(strings.Replace(arenaBundleJSON("arena_world"), `"world": "simple"`, `"world": "corridor"`, 1)))
+	writeWorldBundle(t, dir, "simple", strings.Replace(arenaBundleJSON(), `"world": "simple"`, `"world": "corridor"`, 1))
 	worldPort := &fakeWorldPort{}
 	vehicleFactory := &fakeVehicleFactory{}
 	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: dir}
 	_, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
+		Robots: 1, World: "simple",
 	})
 	if err == nil || !strings.Contains(err.Error(), `requested "simple"`) {
 		t.Fatalf("expected world mismatch, got %v", err)
 	}
 }
 
-func TestStartRollsBackWhenSeedingStationsFails(t *testing.T) {
-	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
-	vehicleFactory := &fakeVehicleFactory{stationsFail: "robot1"}
-	worldPort := &fakeWorldPort{}
-	orch := Orchestrator{World: worldPort, VehicleFactory: vehicleFactory, assetsDir: assetsWithWorldMap(t, archive)}
-	_, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 1, World: "simple", AppImage: "runtime", EnvImage: "env",
-	})
-	if err == nil || !strings.Contains(err.Error(), "stations refused") {
-		t.Fatalf("expected station seeding error, got %v", err)
-	}
-	if !worldPort.stopped || !vehicleFactory.ports[0].stopped {
-		t.Fatal("start did not roll back after the station seeding failure")
-	}
-}
-
-// 过渡态：世界由环境提供，而车端 launch 按自己镜像的 worlds 目录校验世界名
-// （sim_nav2.launch.py 的 _world_path）。把环境这份 SDF 只读挂进车端容器，
-// 世界就只有一份文件。easygo 侧接受显式世界路径后（合同 §5 第 1 条）一起删。
-func TestStartHandsTheWorldFileToTheAppContainer(t *testing.T) {
-	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1"}})
-	dir := t.TempDir()
-	writeWorldAsset(t, dir, "corridor.sdf", []byte("<sdf/>"))
-	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
-	orch := Orchestrator{Engine: engine, AppReady: alwaysReady, assetsDir: dir}
-	if _, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 1, World: "corridor", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
-		DataRoot: t.TempDir(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(dir, "worlds", "corridor.sdf") + ":" + appWorldsDir + "/corridor.sdf:ro"
-	for _, spec := range engine.started {
-		if spec.Labels[contract.LabelRole] != contract.RoleApp {
-			continue
-		}
-		if !slices.Contains(spec.Binds, want) {
-			t.Fatalf("%s binds=%v missing the world handover", spec.Name, spec.Binds)
-		}
-		return
-	}
-	t.Fatal("no app container was started")
-}
-
-func TestWorldHandoverBindSkipsWorldsTheEnvironmentDoesNotShip(t *testing.T) {
-	dir := t.TempDir()
-	writeWorldAsset(t, dir, "corridor.sdf", []byte("<sdf/>"))
-	if bind := worldHandoverBind(dir, "simple"); bind != "" {
-		t.Fatalf("unexpected handover for a world the environment does not ship: %s", bind)
-	}
-	if bind := worldHandoverBind(dir, "corridor"); !strings.HasSuffix(bind, "/corridor.sdf:ro") {
-		t.Fatalf("handover bind=%q", bind)
-	}
-}
-
-func TestWorldHandoverBindUsesAnAbsoluteHostPath(t *testing.T) {
-	dir := t.TempDir()
-	writeWorldAsset(t, dir, "corridor.sdf", []byte("<sdf/>"))
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(previous) })
-	// 相对的资产目录：读文件没问题，但挂载源必须被解析成绝对路径，否则 Docker 拒绝创建容器。
-	bind := worldHandoverBind("worlds-assets", "corridor")
-	if bind != "" {
-		t.Fatalf("expected no handover when the world file is not under the assets dir: %s", bind)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "worlds-assets", "worlds"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(dir, "worlds", "corridor.sdf"), filepath.Join(dir, "worlds-assets", "worlds", "corridor.sdf")); err != nil {
-		t.Fatal(err)
-	}
-	bind = worldHandoverBind("worlds-assets", "corridor")
-	host, _, ok := strings.Cut(bind, ":")
-	if !ok {
-		t.Fatalf("bind=%q", bind)
-	}
-	if !filepath.IsAbs(host) {
-		t.Fatalf("host side of the bind is relative: %q", bind)
-	}
-}
-
 // bundle 只给部分车声明初始位姿时直接失败：混用"声明的"和"默认 stride"是静默陷阱。
 func TestStartRejectsPartialBundleInitialPoses(t *testing.T) {
-	archive := mapExportArchive(t, map[string]string{"sros/map/arena_world0.pgm": "pgm"})
 	dir := t.TempDir()
-	writeWorldAsset(t, dir, "simple.map_export", archive)
-	writeWorldAsset(t, dir, "simple.world.json", []byte(`{
+	writeWorldBundle(t, dir, "simple", `{
   "world": "simple",
-  "map_name": "arena_world",
-  "origin_offset_mm": {"x": 0, "y": 0},
   "stations": [],
   "initial_poses": [{"index": 1, "x": 1, "y": 1, "z": 0.05, "yaw": 0}],
-  "scenarios": ["s1.sh"]
-}`))
-	orch := Orchestrator{Engine: &fakeEngine{infos: map[string]ContainerInfo{}}, AppReady: alwaysReady, assetsDir: dir}
+  "worlds": {},
+  "vehicles": {"fake": {}}
+}`)
+	orch := Orchestrator{World: &fakeWorldPort{}, VehicleFactory: &fakeVehicleFactory{}, assetsDir: dir}
 	_, err := orch.Start(context.Background(), contract.StartConfig{
-		Robots: 2, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
-		DataRoot: t.TempDir(),
+		Robots: 2, World: "simple",
 	})
 	if err == nil || !strings.Contains(err.Error(), "declares no initial pose for robot 2") {
 		t.Fatalf("expected a partial-initial-poses error, got %v", err)

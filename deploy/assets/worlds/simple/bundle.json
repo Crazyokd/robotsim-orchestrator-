@@ -1,0 +1,85 @@
+{
+  "world": "simple",
+  "stations": [
+    {
+      "id": 1,
+      "x": 7.798,
+      "y": -3.1015,
+      "yaw": 0.0
+    },
+    {
+      "id": 2,
+      "x": -5.982,
+      "y": -4.2615,
+      "yaw": 0.0
+    },
+    {
+      "id": 3,
+      "x": -13.622,
+      "y": -10.3815,
+      "yaw": 0.0
+    },
+    {
+      "id": 4,
+      "x": 8.038,
+      "y": 10.0385,
+      "yaw": 0.0
+    },
+    {
+      "id": 5,
+      "x": 14.578,
+      "y": -9.3615,
+      "yaw": 0.0
+    },
+    {
+      "id": 6,
+      "x": 14.554,
+      "y": -6.9055,
+      "yaw": 0.0
+    },
+    {
+      "id": 7,
+      "x": 14.478,
+      "y": 9.8185,
+      "yaw": 0.0
+    },
+    {
+      "id": 8,
+      "x": 14.578,
+      "y": -9.6815,
+      "yaw": 0.0
+    }
+  ],
+  "initial_poses": [
+    {
+      "index": 1,
+      "x": 0,
+      "y": 0,
+      "z": 0.05,
+      "yaw": 0
+    },
+    {
+      "index": 2,
+      "x": 3.0,
+      "y": 0.0,
+      "z": 0.05,
+      "yaw": 0
+    }
+  ],
+  "worlds": {
+    "gazebo": {
+      "sdf": "gazebo/world.sdf"
+    }
+  },
+  "vehicles": {
+    "easygo": {
+      "map_export": "easygo/simple.map_export",
+      "map_name": "arena_world",
+      "origin_offset_mm": {
+        "x": 1978.0,
+        "y": -3181.5
+      }
+    }
+  },
+  "source_sha": "05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1"
+}

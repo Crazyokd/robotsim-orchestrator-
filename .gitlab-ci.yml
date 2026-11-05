@@ -22,8 +22,10 @@ lint:
     - test -z "$(gofmt -l cmd internal)"
     - go vet ./...
     - go test -race ./...
+    # 框架守卫：契约 / 编排 / 资产 / CLI 不得出现任何实现名词（词边界匹配）。
+    - '! grep -rEinw "gazebo|gz|easygo|docker|ros" internal/contract internal/orchestrator internal/assets internal/cli'
     - go build -o /tmp/simenv ./cmd/simenv
-    - go build -o /tmp/simenv-world ./cmd/simenv-world
+    - go build -o /tmp/simenv-world-gazebo ./cmd/simenv-world-gazebo
 
 world-image:
   stage: image
@@ -35,8 +37,7 @@ world-image:
     - changes:
         - deploy/Dockerfile
         - deploy/assets/**/*
-        - cmd/simenv-world/**/*
-        - internal/contract/**/*
-        - internal/world/**/*
+        - cmd/simenv-world-gazebo/**/*
+        - internal/ports/world/gazebo/**/*
   script:
-    - docker build -f deploy/Dockerfile -t simenv-world:ci .
+    - docker build -f deploy/Dockerfile -t simenv-world-gazebo:ci .

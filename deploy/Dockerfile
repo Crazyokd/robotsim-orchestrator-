@@ -3,7 +3,7 @@ WORKDIR /src
 COPY go.mod ./
 COPY cmd cmd
 COPY internal internal
-RUN go build -o /simenv-world ./cmd/simenv-world
+RUN go build -o /simenv-world-gazebo ./cmd/simenv-world-gazebo
 
 FROM nexus3.sr:8060/ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -14,10 +14,10 @@ RUN apt-get update \
     && apt-get update \
     && apt-get install -y --no-install-recommends gz-harmonic \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /simenv-world /usr/local/bin/simenv-world
+COPY --from=build /simenv-world-gazebo /usr/local/bin/simenv-world-gazebo
 COPY deploy/assets /opt/simenv
 ENV GZ_SIM_RESOURCE_PATH=/opt/simenv/models
 ENV GZ_IP=127.0.0.1
 ENV GZ_PARTITION=easygo_sim
 LABEL simenv.easygo_world_source_sha="05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1"
-ENTRYPOINT ["/usr/local/bin/simenv-world"]
+ENTRYPOINT ["/usr/local/bin/simenv-world-gazebo"]
