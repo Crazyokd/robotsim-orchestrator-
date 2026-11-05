@@ -186,9 +186,9 @@ func TestShippedWorldBundlesDeclareCoordinatesInsideTheirMaps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			raw, err := bundle.VehicleSection(Kind)
-			if err != nil {
-				t.Fatal(err)
+			raw, ok := bundle.Vehicles[Kind]
+			if !ok {
+				t.Skipf("world %s does not serve kind %s", world, Kind)
 			}
 			section, err := parseSection(raw)
 			if err != nil {

@@ -6,7 +6,6 @@ package null
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -19,24 +18,10 @@ import (
 // Kind 是世界种类：bundle 的 worlds.null 节与会话标记按它路由。
 const Kind = "null"
 
-// Options 是 null 世界的实现参数。
-type Options struct {
-	// DataRoot 是状态文件目录；空走 <用户缓存目录>/simenv/null。
-	DataRoot string
-}
-
-// RegisterFlags 把实现参数挂到 start 的 FlagSet 上。
-func RegisterFlags(fs *flag.FlagSet) *Options {
-	options := &Options{}
-	fs.StringVar(&options.DataRoot, "null-data-root", "", "")
-	return options
-}
-
-// dataRoot 解析状态目录；缓存目录都解析不出来是环境坏了，直接失败。
-func (o Options) dataRoot() (string, error) {
-	if o.DataRoot != "" {
-		return o.DataRoot, nil
-	}
+// dataRoot 是状态目录：固定 <用户缓存目录>/simenv/null。发现路径（status /
+// stop / call）拿不到 start 的参数，所以 null 世界没有参数——状态位置
+// 必须参数无关，测试用 XDG_CACHE_HOME 隔离。
+func dataRoot() (string, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user cache dir: %w", err)

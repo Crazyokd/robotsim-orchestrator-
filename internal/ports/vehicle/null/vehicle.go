@@ -18,9 +18,7 @@ import (
 )
 
 // Factory 按台造 null 车端，并从状态目录发现活着的车。
-type Factory struct {
-	Options Options
-}
+type Factory struct{}
 
 func (Factory) Kind() string { return Kind }
 
@@ -44,17 +42,16 @@ func (f Factory) New(_ context.Context, session contract.Session, robot contract
 		section = parsed
 	}
 	return Vehicle{
-		Options: f.Options,
-		Robot:   robot,
-		world:   link.World,
-		note:    section.Note,
+		Robot: robot,
+		world: link.World,
+		note:  section.Note,
 	}, nil
 }
 
 // Discover 读状态目录里的 robot<N>.json：文件在就是车在，与容器车端的
 // "容器在就是车在"同一语义。
 func (f Factory) Discover(_ context.Context) ([]orchestrator.VehiclePort, error) {
-	root, err := f.Options.dataRoot()
+	root, err := dataRoot()
 	if err != nil {
 		return nil, err
 	}
@@ -76,8 +73,7 @@ func (f Factory) Discover(_ context.Context) ([]orchestrator.VehiclePort, error)
 	ports := make([]orchestrator.VehiclePort, 0, len(indices))
 	for _, index := range indices {
 		ports = append(ports, Vehicle{
-			Options: f.Options,
-			Robot:   contract.Robot{Index: index, Name: contract.RobotName(index)},
+			Robot: contract.Robot{Index: index, Name: contract.RobotName(index)},
 		})
 	}
 	return ports, nil
@@ -107,14 +103,13 @@ type vehicleState struct {
 
 // Vehicle 是一台 null 车：Start 写状态文件，Status/Discover 读它，Stop 删它。
 type Vehicle struct {
-	Options Options
-	Robot   contract.Robot
-	world   string
-	note    string
+	Robot contract.Robot
+	world string
+	note  string
 }
 
 func (v Vehicle) statePath() (string, error) {
-	root, err := v.Options.dataRoot()
+	root, err := dataRoot()
 	if err != nil {
 		return "", err
 	}

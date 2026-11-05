@@ -14,7 +14,8 @@ import (
 
 func testFactory(t *testing.T) Factory {
 	t.Helper()
-	return Factory{Options: Options{DataRoot: t.TempDir()}}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	return Factory{}
 }
 
 func newVehicle(t *testing.T, factory Factory, index int) orchestrator.VehiclePort {

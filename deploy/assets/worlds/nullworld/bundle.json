@@ -1,0 +1,37 @@
+{
+  "world": "nullworld",
+  "stations": [
+    {
+      "id": 1,
+      "x": 1.0,
+      "y": 2.0,
+      "yaw": 0.5
+    }
+  ],
+  "initial_poses": [
+    {
+      "index": 1,
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0,
+      "yaw": 0.0
+    },
+    {
+      "index": 2,
+      "x": 3.0,
+      "y": 0.0,
+      "z": 0.0,
+      "yaw": 1.5707963
+    }
+  ],
+  "worlds": {
+    "null": {
+      "note": "in-repo second implementation: no containers, state files only"
+    }
+  },
+  "vehicles": {
+    "null": {
+      "note": "records provisioning into per-robot state files"
+    }
+  }
+}

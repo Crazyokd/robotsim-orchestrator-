@@ -12,7 +12,8 @@ import (
 
 func testWorld(t *testing.T) World {
 	t.Helper()
-	return World{Options: Options{DataRoot: t.TempDir()}}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	return World{}
 }
 
 func twoRobotSession() contract.Session {
@@ -105,7 +106,7 @@ func TestLifecycle(t *testing.T) {
 // testWorldAt 造一个指向同一状态目录的新实例，模拟另一次 CLI 调用。
 func testWorldAt(w World, t *testing.T) World {
 	t.Helper()
-	return World{Options: w.Options}
+	return World{}
 }
 
 func TestStartParsesSectionAndRecordsNote(t *testing.T) {

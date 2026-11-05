@@ -34,14 +34,12 @@ type robotState struct {
 
 // World 是 null 世界 Port：Start 写状态文件，Ready/Status/Pose/Reset 读写它，
 // Stop 删它。状态目录就是真相——另一个 simenv 进程据此发现这次会话。
-type World struct {
-	Options Options
-}
+type World struct{}
 
 func (World) Kind() string { return Kind }
 
 func (w World) statePath() (string, error) {
-	root, err := w.Options.dataRoot()
+	root, err := dataRoot()
 	if err != nil {
 		return "", err
 	}

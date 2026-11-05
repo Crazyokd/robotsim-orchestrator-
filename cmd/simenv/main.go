@@ -17,8 +17,8 @@ import (
 )
 
 // 组合根：这里唯一允许认识所有 Port 实现的地方。新增一个世界/车端 Port
-// 就是 import 它的包、按种类注册进 Worlds / Vehicles、并在 registerFlags
-// 里挂它的 RegisterFlags。
+// 就是 import 它的包、按种类注册进 Worlds / Vehicles；有实现参数的再
+// 在 registerFlags 里挂它的 RegisterFlags（null 对零参数，不挂）。
 func main() {
 	// 容器运行时是惰性构造的：只有选中依赖它的种类时才建立连接——
 	// 不依赖它的会话（例如纯进程内的种类）不该被要求有容器运行时可用。
@@ -37,9 +37,7 @@ func main() {
 	// status / stop / call 不经 start FlagSet，Options 保持 nil——
 	// 这些路径只发现与停容器，不需要启动参数。
 	var worldOptions *gazebo.Options
-	var nullWorldOptions *nullworld.Options
 	var vehicleOptions *easygo.Options
-	var nullVehicleOptions *nullvehicle.Options
 	runner := orchestrator.Orchestrator{
 		Worlds: map[string]orchestrator.NewWorldFunc{
 			gazebo.Kind: func(contract.StartConfig) (orchestrator.WorldPort, error) {
@@ -50,7 +48,7 @@ func main() {
 				return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions)}, nil
 			},
 			nullworld.Kind: func(contract.StartConfig) (orchestrator.WorldPort, error) {
-				return nullworld.World{Options: deref(nullWorldOptions)}, nil
+				return nullworld.World{}, nil
 			},
 		},
 		Vehicles: map[string]orchestrator.NewVehicleFactoryFunc{
@@ -62,15 +60,13 @@ func main() {
 				return easygo.Factory{Engine: engine, Options: deref(vehicleOptions)}, nil
 			},
 			nullvehicle.Kind: func(contract.StartConfig) (orchestrator.VehiclePortFactory, error) {
-				return nullvehicle.Factory{Options: deref(nullVehicleOptions)}, nil
+				return nullvehicle.Factory{}, nil
 			},
 		},
 	}
 	registerFlags := func(fs *flag.FlagSet) {
 		worldOptions = gazebo.RegisterFlags(fs)
-		nullWorldOptions = nullworld.RegisterFlags(fs)
 		vehicleOptions = easygo.RegisterFlags(fs)
-		nullVehicleOptions = nullvehicle.RegisterFlags(fs)
 	}
 	if err := cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, runner, registerFlags); err != nil {
 		fmt.Fprintln(os.Stderr, err)

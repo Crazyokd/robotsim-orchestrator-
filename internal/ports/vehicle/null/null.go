@@ -6,7 +6,6 @@ package null
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -18,23 +17,10 @@ import (
 // Kind 是车端种类：bundle 的 vehicles.null 节与会话标记按它路由。
 const Kind = "null"
 
-// Options 是 null 车端的实现参数。
-type Options struct {
-	// DataRoot 是状态文件目录；空走 <用户缓存目录>/simenv/null-vehicles。
-	DataRoot string
-}
-
-// RegisterFlags 把实现参数挂到 start 的 FlagSet 上。
-func RegisterFlags(fs *flag.FlagSet) *Options {
-	options := &Options{}
-	fs.StringVar(&options.DataRoot, "null-vehicle-data-root", "", "")
-	return options
-}
-
-func (o Options) dataRoot() (string, error) {
-	if o.DataRoot != "" {
-		return o.DataRoot, nil
-	}
+// dataRoot 是状态目录：固定 <用户缓存目录>/simenv/null-vehicles。发现路径
+// （status / stop / call）拿不到 start 的参数，所以 null 车端没有参数——
+// 状态位置必须参数无关，测试用 XDG_CACHE_HOME 隔离。
+func dataRoot() (string, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user cache dir: %w", err)
