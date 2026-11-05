@@ -98,6 +98,21 @@ func TestStartRejectsAnUnknownFlag(t *testing.T) {
 	}
 }
 
+func TestStartPassesExplicitKinds(t *testing.T) {
+	orch := &fakeOrch{}
+	var out bytes.Buffer
+	err := Run([]string{
+		"start", "--world", "noworld",
+		"--world-kind", "fake-world", "--vehicle-kind", "fake",
+	}, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orch.started.WorldKind != "fake-world" || orch.started.VehicleKind != "fake" {
+		t.Fatalf("kinds not passed through: %+v", orch.started)
+	}
+}
+
 func TestUnknownCommandFails(t *testing.T) {
 	if err := Run([]string{"logs"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
 		t.Fatal("expected error")

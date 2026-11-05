@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 
 	"git.standard-robots.com/yicao/sim/internal/cli"
 	"git.standard-robots.com/yicao/sim/internal/contract"
@@ -14,12 +15,21 @@ import (
 )
 
 // 组合根：这里唯一允许认识所有 Port 实现的地方。新增一个世界/车端 Port
-// 就是 import 它的包并在构造器里加一行。
+// 就是 import 它的包、按种类注册进 Worlds / Vehicles、并在 registerFlags
+// 里挂它的 RegisterFlags。
 func main() {
-	engine, err := docker.NewDockerEngine()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	// 容器运行时是惰性构造的：只有选中依赖它的种类时才建立连接——
+	// 不依赖它的会话（例如纯进程内的种类）不该被要求有容器运行时可用。
+	var (
+		engineOnce sync.Once
+		engine     docker.Engine
+		engineErr  error
+	)
+	sharedEngine := func() (docker.Engine, error) {
+		engineOnce.Do(func() {
+			engine, engineErr = docker.NewDockerEngine()
+		})
+		return engine, engineErr
 	}
 	// 各 Port 的 Options 由它们的 RegisterFlags 在 start 解析时填充；
 	// status / stop / call 不经 start FlagSet，Options 保持 nil——
@@ -27,11 +37,23 @@ func main() {
 	var worldOptions *gazebo.Options
 	var vehicleOptions *easygo.Options
 	runner := orchestrator.Orchestrator{
-		NewWorld: func(cfg contract.StartConfig) orchestrator.WorldPort {
-			return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions)}
+		Worlds: map[string]orchestrator.NewWorldFunc{
+			gazebo.Kind: func(contract.StartConfig) (orchestrator.WorldPort, error) {
+				engine, err := sharedEngine()
+				if err != nil {
+					return nil, err
+				}
+				return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions)}, nil
+			},
 		},
-		NewVehicles: func(cfg contract.StartConfig) orchestrator.VehiclePortFactory {
-			return easygo.Factory{Engine: engine, Options: deref(vehicleOptions)}
+		Vehicles: map[string]orchestrator.NewVehicleFactoryFunc{
+			easygo.Kind: func(contract.StartConfig) (orchestrator.VehiclePortFactory, error) {
+				engine, err := sharedEngine()
+				if err != nil {
+					return nil, err
+				}
+				return easygo.Factory{Engine: engine, Options: deref(vehicleOptions)}, nil
+			},
 		},
 	}
 	registerFlags := func(fs *flag.FlagSet) {

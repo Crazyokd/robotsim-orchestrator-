@@ -45,6 +45,8 @@ type WorldStatus struct {
 }
 
 type WorldPort interface {
+	// Kind 是世界种类：bundle 按它取 worlds.<kind> 节，会话标记按它路由。
+	Kind() string
 	// Start 拉起世界，并返回每台车的挂接信息（与 session.Robots 等长同序）。
 	Start(ctx context.Context, session contract.Session) ([]Attachment, error)
 	Ready(ctx context.Context, session contract.Session) (WorldReady, error)
@@ -84,14 +86,27 @@ type VehiclePortFactory interface {
 	Discover(ctx context.Context) ([]VehiclePort, error)
 }
 
+// NewWorldFunc 按种类构造世界 Port；构造失败（例如它依赖的运行时不可用）
+// 返回错误。NewVehicleFactoryFunc 同理。
+type NewWorldFunc func(cfg contract.StartConfig) (WorldPort, error)
+type NewVehicleFactoryFunc func(cfg contract.StartConfig) (VehiclePortFactory, error)
+
 // Orchestrator 是编排框架：它只认识接口。世界与车端的具体实现由组合根
-// 经 NewWorld / NewVehicles 注入；测试用 World / VehicleFactory 直接给假实现。
+// 按种类注册进 Worlds / Vehicles；start 时种类由 bundle 节的唯一键决定
+// （裸世界由 --world-kind / --vehicle-kind 显式给），start 之后的动词按
+// 会话标记路由到当时用的种类。测试用 World / VehicleFactory 直接给假实现，
+// 注入即绕过注册表与标记。
 type Orchestrator struct {
 	World          WorldPort
-	NewWorld       func(cfg contract.StartConfig) WorldPort
 	VehicleFactory VehiclePortFactory
-	NewVehicles    func(cfg contract.StartConfig) VehiclePortFactory
+	Worlds         map[string]NewWorldFunc
+	Vehicles       map[string]NewVehicleFactoryFunc
 	assetsDir      string
+}
+
+// usingRegistry 区分两条路：组合根的注册表（生产），或直接注入的假实现（测试）。
+func (o Orchestrator) usingRegistry() bool {
+	return o.World == nil && o.VehicleFactory == nil
 }
 
 func (o Orchestrator) assetsPath() string {
@@ -115,20 +130,31 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if err != nil {
 		return Status{}, err
 	}
-	worldPort, err := o.worldPort(cfg)
+	// 种类决定：bundle 节的唯一键是单一来源，显式 kind 只在裸世界时必需、
+	// 给了就必须与 bundle 一致。选完才构造对应 Port——未选中的实现连构造
+	// 都不发生（它的运行时不可用不该拖垮别的种类的会话）。
+	worldPort, err := o.worldPortForStart(cfg, bundle)
 	if err != nil {
 		return Status{}, err
 	}
-	vehicleFactory, err := o.vehicleFactory(cfg)
+	vehicleFactory, err := o.vehicleFactoryForStart(cfg, bundle)
 	if err != nil {
 		return Status{}, err
 	}
-	existingVehicles, err := vehicleFactory.Discover(ctx)
-	if err != nil {
-		return Status{}, err
-	}
-	if err := stopVehiclePorts(ctx, existingVehicles); err != nil {
-		return Status{}, err
+	// 先停掉上一次会话：注册表路径按会话标记找到当时用的种类停干净；
+	// 注入路径（测试）停掉工厂发现的全部车。然后再开新会话。
+	if o.usingRegistry() {
+		if err := o.stopMarkedSession(ctx); err != nil {
+			return Status{}, err
+		}
+	} else {
+		existingVehicles, err := vehicleFactory.Discover(ctx)
+		if err != nil {
+			return Status{}, err
+		}
+		if err := stopVehiclePorts(ctx, existingVehicles); err != nil {
+			return Status{}, err
+		}
 	}
 	vehiclePorts := make([]VehiclePort, 0, len(session.Robots))
 	rollback := func() error {
@@ -180,10 +206,21 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if err != nil {
 		return Status{}, errors.Join(err, rollback())
 	}
+	if o.usingRegistry() {
+		if err := saveSessionMarker(sessionMarker{
+			WorldKind:   worldPort.Kind(),
+			VehicleKind: vehicleFactory.Kind(),
+		}); err != nil {
+			return Status{}, errors.Join(err, rollback())
+		}
+	}
 	return status, nil
 }
 
 func (o Orchestrator) Stop(ctx context.Context) error {
+	if o.usingRegistry() {
+		return o.stopMarkedSession(ctx)
+	}
 	worldPort, worldErr := o.worldPort(contract.StartConfig{})
 	vehicleFactory, factoryErr := o.vehicleFactory(contract.StartConfig{})
 	var vehiclePorts []VehiclePort
@@ -204,6 +241,9 @@ func (o Orchestrator) Stop(ctx context.Context) error {
 }
 
 func (o Orchestrator) Status(ctx context.Context) (Status, error) {
+	if o.usingRegistry() {
+		return o.markedStatus(ctx)
+	}
 	worldPort, err := o.worldPort(contract.StartConfig{})
 	if err != nil {
 		return Status{}, err
@@ -217,6 +257,62 @@ func (o Orchestrator) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	return statusFromPorts(ctx, worldPort, vehiclePorts)
+}
+
+// markedStatus 是注册表路径的 status：按会话标记路由到当时用的种类。
+// 没有标记就是没有进行中的会话——不逐个实现盲探（某个实现的运行时不可用
+// 不该拖垮别的种类，也不该让一次 status 去碰不需要的运行时）。
+func (o Orchestrator) markedStatus(ctx context.Context) (Status, error) {
+	marker, err := loadSessionMarker()
+	if err != nil {
+		return Status{}, err
+	}
+	if marker == nil {
+		return Status{}, nil
+	}
+	worldPort, err := o.newWorld(marker.WorldKind, contract.StartConfig{})
+	if err != nil {
+		return Status{}, err
+	}
+	vehicleFactory, err := o.newVehicleFactory(marker.VehicleKind, contract.StartConfig{})
+	if err != nil {
+		return Status{}, err
+	}
+	vehiclePorts, err := vehicleFactory.Discover(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	return statusFromPorts(ctx, worldPort, vehiclePorts)
+}
+
+// stopMarkedSession 停掉会话标记记录的那次会话：车端按标记的种类发现后停，
+// 世界按标记的种类停。全部停干净才摘标记；停不干净标记留着，好让下一次
+// stop / start 重试。没有标记就是没有会话，直接成功。
+func (o Orchestrator) stopMarkedSession(ctx context.Context) error {
+	marker, err := loadSessionMarker()
+	if err != nil {
+		return err
+	}
+	if marker == nil {
+		return nil
+	}
+	var stopErr error
+	if vehicleFactory, ferr := o.newVehicleFactory(marker.VehicleKind, contract.StartConfig{}); ferr != nil {
+		stopErr = errors.Join(stopErr, ferr)
+	} else if vehiclePorts, derr := vehicleFactory.Discover(ctx); derr != nil {
+		stopErr = errors.Join(stopErr, derr)
+	} else {
+		stopErr = errors.Join(stopErr, stopVehiclePorts(ctx, vehiclePorts))
+	}
+	if worldPort, werr := o.newWorld(marker.WorldKind, contract.StartConfig{}); werr != nil {
+		stopErr = errors.Join(stopErr, werr)
+	} else {
+		stopErr = errors.Join(stopErr, worldPort.Stop(ctx))
+	}
+	if stopErr != nil {
+		return stopErr
+	}
+	return clearSessionMarker()
 }
 
 func statusFromPorts(ctx context.Context, worldPort WorldPort, vehiclePorts []VehiclePort) (Status, error) {
@@ -266,9 +362,6 @@ func (o Orchestrator) worldPort(cfg contract.StartConfig) (WorldPort, error) {
 	if o.World != nil {
 		return o.World, nil
 	}
-	if o.NewWorld != nil {
-		return o.NewWorld(cfg), nil
-	}
 	return nil, fmt.Errorf("world port is not configured")
 }
 
@@ -276,10 +369,78 @@ func (o Orchestrator) vehicleFactory(cfg contract.StartConfig) (VehiclePortFacto
 	if o.VehicleFactory != nil {
 		return o.VehicleFactory, nil
 	}
-	if o.NewVehicles != nil {
-		return o.NewVehicles(cfg), nil
-	}
 	return nil, fmt.Errorf("vehicle factory is not configured")
+}
+
+// worldPortForStart 决定 start 用哪个世界实现并构造它：注入优先（测试）；
+// 否则种类由 bundle worlds 节唯一键决定，显式 kind 与其一致性校验后生效。
+func (o Orchestrator) worldPortForStart(cfg contract.StartConfig, bundle *assets.Bundle) (WorldPort, error) {
+	if o.World != nil {
+		return o.World, nil
+	}
+	bundleKinds := []string(nil)
+	if bundle != nil {
+		for kind := range bundle.Worlds {
+			bundleKinds = append(bundleKinds, kind)
+		}
+	}
+	kind, err := resolveKind("world", "--world-kind", bundleKinds, cfg.WorldKind)
+	if err != nil {
+		return nil, err
+	}
+	return o.newWorld(kind, cfg)
+}
+
+func (o Orchestrator) vehicleFactoryForStart(cfg contract.StartConfig, bundle *assets.Bundle) (VehiclePortFactory, error) {
+	if o.VehicleFactory != nil {
+		return o.VehicleFactory, nil
+	}
+	bundleKinds := []string(nil)
+	if bundle != nil {
+		for kind := range bundle.Vehicles {
+			bundleKinds = append(bundleKinds, kind)
+		}
+	}
+	kind, err := resolveKind("vehicle", "--vehicle-kind", bundleKinds, cfg.VehicleKind)
+	if err != nil {
+		return nil, err
+	}
+	return o.newVehicleFactory(kind, cfg)
+}
+
+// resolveKind 是种类决定的单一规则：bundle 有节时节必须恰好一个、它是单一
+// 来源；裸世界（无 bundle）必须显式给 kind；两个来源都有却不一致直接失败。
+func resolveKind(what, flagName string, bundleKinds []string, explicit string) (string, error) {
+	switch len(bundleKinds) {
+	case 0:
+		if explicit == "" {
+			return "", fmt.Errorf("world ships no bundle: %s is required to pick a %s implementation", flagName, what)
+		}
+		return explicit, nil
+	case 1:
+		if explicit != "" && explicit != bundleKinds[0] {
+			return "", fmt.Errorf("%s %q does not match the bundle's %s kind %q", flagName, explicit, what, bundleKinds[0])
+		}
+		return bundleKinds[0], nil
+	default:
+		return "", fmt.Errorf("bundle declares multiple %s kinds %v: exactly one section is allowed", what, bundleKinds)
+	}
+}
+
+func (o Orchestrator) newWorld(kind string, cfg contract.StartConfig) (WorldPort, error) {
+	newWorld, ok := o.Worlds[kind]
+	if !ok {
+		return nil, fmt.Errorf("no world port registered for kind %q", kind)
+	}
+	return newWorld(cfg)
+}
+
+func (o Orchestrator) newVehicleFactory(kind string, cfg contract.StartConfig) (VehiclePortFactory, error) {
+	newVehicles, ok := o.Vehicles[kind]
+	if !ok {
+		return nil, fmt.Errorf("no vehicle port registered for kind %q", kind)
+	}
+	return newVehicles(cfg)
 }
 
 func stopVehiclePorts(ctx context.Context, vehiclePorts []VehiclePort) error {

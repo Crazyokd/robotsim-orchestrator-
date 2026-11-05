@@ -22,9 +22,12 @@ type fakeWorldPort struct {
 	started     []contract.Session
 	stopped     bool
 	startErr    error
+	stopErr     error
 	attachments []Attachment
 	status      WorldStatus
 }
+
+func (f *fakeWorldPort) Kind() string { return "fake-world" }
 
 func (f *fakeWorldPort) Start(_ context.Context, session contract.Session) ([]Attachment, error) {
 	f.started = append(f.started, session)
@@ -69,7 +72,7 @@ func (f *fakeWorldPort) Status(context.Context) (WorldStatus, error) {
 
 func (f *fakeWorldPort) Stop(context.Context) error {
 	f.stopped = true
-	return nil
+	return f.stopErr
 }
 
 func (f *fakeWorldPort) Pose(context.Context, int) (EntityPose, error) {
@@ -131,6 +134,7 @@ func (f *fakeVehiclePort) Forward(ctx context.Context, request []byte) ([]byte, 
 
 type fakeVehicleFactory struct {
 	ports         []*fakeVehiclePort
+	discovered    []*fakeVehiclePort // 非空时 Discover 返回它们：预置的残留会话
 	failRobot     string
 	notReadyRobot string
 	provisionFail string
@@ -170,8 +174,12 @@ func (f *fakeVehicleFactory) Discover(context.Context) ([]VehiclePort, error) {
 	if f.discoverErr != nil {
 		return nil, f.discoverErr
 	}
-	ports := make([]VehiclePort, 0, len(f.ports))
-	for _, port := range f.ports {
+	source := f.ports
+	if f.discovered != nil {
+		source = f.discovered
+	}
+	ports := make([]VehiclePort, 0, len(source))
+	for _, port := range source {
 		ports = append(ports, port)
 	}
 	return ports, nil

@@ -32,12 +32,18 @@ type Robot struct {
 	Pose  Pose   `json:"pose"`
 }
 
-// StartConfig 是一次会话的全部框架输入：世界名、车数、可选的逐车位姿。
-// 镜像、数据目录、viewer 等实现参数是各 Port 的 Options，不进契约。
+// StartConfig 是一次会话的全部框架输入：世界名、车数、可选的逐车位姿，
+// 以及可选的实现种类选择。镜像、数据目录、viewer 等实现参数是各 Port 的
+// Options，不进契约。
 type StartConfig struct {
 	World  string
 	Robots int
 	Poses  []Pose
+	// WorldKind / VehicleKind 显式选择实现种类。世界带 bundle 时种类由
+	// bundle 的 worlds / vehicles 节唯一键决定，这里给了就必须一致；
+	// 裸世界（无 bundle）没有可决定的键，两个 kind 都必须显式给。
+	WorldKind   string
+	VehicleKind string
 }
 
 func RobotName(index int) string {
@@ -67,6 +73,16 @@ func (c StartConfig) Validate() error {
 	}
 	if len(c.Poses) > 0 && len(c.Poses) != c.Robots {
 		return fmt.Errorf("poses count %d does not match robots %d", len(c.Poses), c.Robots)
+	}
+	if c.WorldKind != "" {
+		if err := validateSafeToken("world kind", c.WorldKind); err != nil {
+			return err
+		}
+	}
+	if c.VehicleKind != "" {
+		if err := validateSafeToken("vehicle kind", c.VehicleKind); err != nil {
+			return err
+		}
 	}
 	return nil
 }

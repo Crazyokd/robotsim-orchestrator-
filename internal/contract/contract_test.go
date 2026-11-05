@@ -65,6 +65,18 @@ func TestStartConfigRejectsZeroRobots(t *testing.T) {
 	}
 }
 
+func TestStartConfigValidatesKindTokens(t *testing.T) {
+	if err := (StartConfig{Robots: 1, World: "simple", WorldKind: "fake-world", VehicleKind: "fake"}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (StartConfig{Robots: 1, World: "simple", WorldKind: "bad/kind"}).Validate(); err == nil {
+		t.Fatal("unsafe world kind must fail")
+	}
+	if err := (StartConfig{Robots: 1, World: "simple", VehicleKind: "bad kind"}).Validate(); err == nil {
+		t.Fatal("unsafe vehicle kind must fail")
+	}
+}
+
 func TestStartConfigBuildsNeutralSession(t *testing.T) {
 	session, err := StartConfig{
 		Robots: 2,

@@ -101,14 +101,17 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner
 	}
 }
 
-// parseStart 解析 start 的参数：框架只有 --world / --robots / --poses，
-// 其余 flag 由各 Port 的 RegisterFlags 挂上来、parse 时直接填进它们的 Options。
+// parseStart 解析 start 的参数：框架只有 --world / --robots / --poses /
+// --world-kind / --vehicle-kind，其余 flag 由各 Port 的 RegisterFlags 挂上来、
+// parse 时直接填进它们的 Options。
 func parseStart(args []string, registerFlags []func(*flag.FlagSet)) (contract.StartConfig, error) {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	robots := fs.Int("robots", 1, "")
 	worldName := fs.String("world", "", "")
 	posesText := fs.String("poses", "", "")
+	worldKind := fs.String("world-kind", "", "")
+	vehicleKind := fs.String("vehicle-kind", "", "")
 	for _, register := range registerFlags {
 		register(fs)
 	}
@@ -120,9 +123,11 @@ func parseStart(args []string, registerFlags []func(*flag.FlagSet)) (contract.St
 		return contract.StartConfig{}, err
 	}
 	return contract.StartConfig{
-		Robots: *robots,
-		World:  *worldName,
-		Poses:  poses,
+		Robots:      *robots,
+		World:       *worldName,
+		Poses:       poses,
+		WorldKind:   *worldKind,
+		VehicleKind: *vehicleKind,
 	}, nil
 }
 

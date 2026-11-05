@@ -23,6 +23,9 @@ type DockerWorld struct {
 	Sleep   func(context.Context, time.Duration) error
 }
 
+// Kind 满足框架的世界种类约定：bundle 的 worlds.gazebo 节与会话标记按它路由。
+func (DockerWorld) Kind() string { return Kind }
+
 func (w DockerWorld) Start(ctx context.Context, session contract.Session) ([]orchestrator.Attachment, error) {
 	if err := session.Validate(); err != nil {
 		return nil, err
