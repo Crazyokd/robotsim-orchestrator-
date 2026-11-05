@@ -11,6 +11,7 @@ import (
 	"git.standard-robots.com/yicao/sim/internal/orchestrator"
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
 	"git.standard-robots.com/yicao/sim/internal/ports/vehicle/easygo"
+	nullvehicle "git.standard-robots.com/yicao/sim/internal/ports/vehicle/null"
 	"git.standard-robots.com/yicao/sim/internal/ports/world/gazebo"
 	nullworld "git.standard-robots.com/yicao/sim/internal/ports/world/null"
 )
@@ -38,6 +39,7 @@ func main() {
 	var worldOptions *gazebo.Options
 	var nullWorldOptions *nullworld.Options
 	var vehicleOptions *easygo.Options
+	var nullVehicleOptions *nullvehicle.Options
 	runner := orchestrator.Orchestrator{
 		Worlds: map[string]orchestrator.NewWorldFunc{
 			gazebo.Kind: func(contract.StartConfig) (orchestrator.WorldPort, error) {
@@ -59,12 +61,16 @@ func main() {
 				}
 				return easygo.Factory{Engine: engine, Options: deref(vehicleOptions)}, nil
 			},
+			nullvehicle.Kind: func(contract.StartConfig) (orchestrator.VehiclePortFactory, error) {
+				return nullvehicle.Factory{Options: deref(nullVehicleOptions)}, nil
+			},
 		},
 	}
 	registerFlags := func(fs *flag.FlagSet) {
 		worldOptions = gazebo.RegisterFlags(fs)
 		nullWorldOptions = nullworld.RegisterFlags(fs)
 		vehicleOptions = easygo.RegisterFlags(fs)
+		nullVehicleOptions = nullvehicle.RegisterFlags(fs)
 	}
 	if err := cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, runner, registerFlags); err != nil {
 		fmt.Fprintln(os.Stderr, err)
