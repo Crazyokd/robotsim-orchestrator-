@@ -25,12 +25,14 @@ type fakeWorldPort struct {
 	stopErr     error
 	attachments []Attachment
 	status      WorldStatus
+	sections    []assets.Section
 }
 
 func (f *fakeWorldPort) Kind() string { return "fake-world" }
 
-func (f *fakeWorldPort) Start(_ context.Context, session contract.Session) ([]Attachment, error) {
+func (f *fakeWorldPort) Start(_ context.Context, session contract.Session, section assets.Section) ([]Attachment, error) {
 	f.started = append(f.started, session)
+	f.sections = append(f.sections, section)
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
@@ -433,7 +435,7 @@ func assetsWithBundle(t *testing.T) string {
 
 // arenaBundleJSON is a bundle manifest whose stations the tests assert on.
 // initial_poses 留空 -> 出生位姿沿用 session 的 spawn 位姿。
-// vehicles.fake 节是假车端工厂的注册名；世界节本步还无人消费，留空表。
+// 两节的键是假实现的注册名：世界节会经 Start 交给世界 Port，车端节经 New 给车端。
 func arenaBundleJSON() string {
 	return `{
   "world": "simple",
@@ -441,7 +443,7 @@ func arenaBundleJSON() string {
     {"id": 4, "x": 8.038, "y": 10.0385, "yaw": 0},
     {"id": 7, "x": 14.478, "y": 9.8185, "yaw": 0}
   ],
-  "worlds": {},
+  "worlds": {"fake-world": {}},
   "vehicles": {"fake": {}}
 }`
 }

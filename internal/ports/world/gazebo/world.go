@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"git.standard-robots.com/yicao/sim/internal/assets"
 	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/orchestrator"
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
@@ -26,12 +27,19 @@ type DockerWorld struct {
 // Kind 满足框架的世界种类约定：bundle 的 worlds.gazebo 节与会话标记按它路由。
 func (DockerWorld) Kind() string { return Kind }
 
-func (w DockerWorld) Start(ctx context.Context, session contract.Session) ([]orchestrator.Attachment, error) {
+func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSection assets.Section) ([]orchestrator.Attachment, error) {
 	if err := session.Validate(); err != nil {
 		return nil, err
 	}
 	if err := w.Options.Validate(); err != nil {
 		return nil, err
+	}
+	// worlds.gazebo 节严格解析：坏节直接失败。SDF 路径目前仍按目录约定
+	// 解析（世界进程在容器内读），节的运行时消费随世界进程接线演进。
+	if len(rawSection) > 0 {
+		if _, err := ParseSection(rawSection); err != nil {
+			return nil, err
+		}
 	}
 	for _, index := range w.Options.CameraRobots {
 		if index < 1 || index > len(session.Robots) {

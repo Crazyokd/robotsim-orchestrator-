@@ -43,7 +43,7 @@ func TestStartFailsWhenTheBundleHasNoSectionForTheVehicleKind(t *testing.T) {
 	writeWorldBundle(t, dir, "simple", `{
   "world": "simple",
   "stations": [],
-  "worlds": {},
+  "worlds": {"fake-world": {}},
   "vehicles": {"other-vehicle": {}}
 }`)
 	orch := Orchestrator{World: &fakeWorldPort{}, VehicleFactory: &fakeVehicleFactory{}, assetsDir: dir}
@@ -64,7 +64,7 @@ func TestStartUsesBundleInitialPosesWhenDeclared(t *testing.T) {
     {"index": 1, "x": 1.5, "y": 2.5, "z": 0.1, "yaw": 1.57},
     {"index": 2, "x": -1.5, "y": -2.5, "z": 0.1, "yaw": 0}
   ],
-  "worlds": {},
+  "worlds": {"fake-world": {}},
   "vehicles": {"fake": {}}
 }`)
 	worldPort := &fakeWorldPort{}
@@ -126,7 +126,7 @@ func TestStartRejectsPartialBundleInitialPoses(t *testing.T) {
   "world": "simple",
   "stations": [],
   "initial_poses": [{"index": 1, "x": 1, "y": 1, "z": 0.05, "yaw": 0}],
-  "worlds": {},
+  "worlds": {"fake-world": {}},
   "vehicles": {"fake": {}}
 }`)
 	orch := Orchestrator{World: &fakeWorldPort{}, VehicleFactory: &fakeVehicleFactory{}, assetsDir: dir}

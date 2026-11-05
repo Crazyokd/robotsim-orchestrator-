@@ -101,7 +101,7 @@ func TestStartRunsTheWorldContainerAndHandsOutAttachments(t *testing.T) {
 		EnvImage: "simenv-world:local", CameraRobots: []int{1},
 	}}
 
-	attachments, err := world.Start(context.Background(), twoRobotSession(t))
+	attachments, err := world.Start(context.Background(), twoRobotSession(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestStartRunsTheWorldContainerAndHandsOutAttachments(t *testing.T) {
 
 func TestStartRequiresAnEnvImage(t *testing.T) {
 	world := DockerWorld{Engine: &fakeEngine{infos: map[string]docker.ContainerInfo{}}}
-	if _, err := world.Start(context.Background(), twoRobotSession(t)); err == nil {
+	if _, err := world.Start(context.Background(), twoRobotSession(t), nil); err == nil {
 		t.Fatal("expected error")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
 	"git.standard-robots.com/yicao/sim/internal/ports/vehicle/easygo"
 	"git.standard-robots.com/yicao/sim/internal/ports/world/gazebo"
+	nullworld "git.standard-robots.com/yicao/sim/internal/ports/world/null"
 )
 
 // 组合根：这里唯一允许认识所有 Port 实现的地方。新增一个世界/车端 Port
@@ -35,6 +36,7 @@ func main() {
 	// status / stop / call 不经 start FlagSet，Options 保持 nil——
 	// 这些路径只发现与停容器，不需要启动参数。
 	var worldOptions *gazebo.Options
+	var nullWorldOptions *nullworld.Options
 	var vehicleOptions *easygo.Options
 	runner := orchestrator.Orchestrator{
 		Worlds: map[string]orchestrator.NewWorldFunc{
@@ -44,6 +46,9 @@ func main() {
 					return nil, err
 				}
 				return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions)}, nil
+			},
+			nullworld.Kind: func(contract.StartConfig) (orchestrator.WorldPort, error) {
+				return nullworld.World{Options: deref(nullWorldOptions)}, nil
 			},
 		},
 		Vehicles: map[string]orchestrator.NewVehicleFactoryFunc{
@@ -58,6 +63,7 @@ func main() {
 	}
 	registerFlags := func(fs *flag.FlagSet) {
 		worldOptions = gazebo.RegisterFlags(fs)
+		nullWorldOptions = nullworld.RegisterFlags(fs)
 		vehicleOptions = easygo.RegisterFlags(fs)
 	}
 	if err := cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, runner, registerFlags); err != nil {

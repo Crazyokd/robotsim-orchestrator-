@@ -48,7 +48,8 @@ type WorldPort interface {
 	// Kind 是世界种类：bundle 按它取 worlds.<kind> 节，会话标记按它路由。
 	Kind() string
 	// Start 拉起世界，并返回每台车的挂接信息（与 session.Robots 等长同序）。
-	Start(ctx context.Context, session contract.Session) ([]Attachment, error)
+	// section 是 bundle 里该世界种类的原始节（裸世界为 nil），认不出就报错。
+	Start(ctx context.Context, session contract.Session, section assets.Section) ([]Attachment, error)
 	Ready(ctx context.Context, session contract.Session) (WorldReady, error)
 	Status(ctx context.Context) (WorldStatus, error)
 	Stop(ctx context.Context) error
@@ -141,6 +142,18 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if err != nil {
 		return Status{}, err
 	}
+	// 两个种类的节在碰任何运行态之前取好：缺节即失败，且不先杀掉旧会话。
+	var worldSection, vehicleSection assets.Section
+	if bundle != nil {
+		worldSection, err = bundle.WorldSection(worldPort.Kind())
+		if err != nil {
+			return Status{}, err
+		}
+		vehicleSection, err = bundle.VehicleSection(vehicleFactory.Kind())
+		if err != nil {
+			return Status{}, err
+		}
+	}
 	// 先停掉上一次会话：注册表路径按会话标记找到当时用的种类停干净；
 	// 注入路径（测试）停掉工厂发现的全部车。然后再开新会话。
 	if o.usingRegistry() {
@@ -165,7 +178,7 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		cleanupErr = errors.Join(cleanupErr, worldPort.Stop(cleanupCtx))
 		return cleanupErr
 	}
-	attachments, err := worldPort.Start(ctx, session)
+	attachments, err := worldPort.Start(ctx, session, worldSection)
 	if err != nil {
 		return Status{}, errors.Join(err, rollback())
 	}
@@ -178,15 +191,8 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if _, err := worldPort.Ready(ctx, session); err != nil {
 		return Status{}, errors.Join(err, rollback())
 	}
-	var section assets.Section
-	if bundle != nil {
-		section, err = bundle.VehicleSection(vehicleFactory.Kind())
-		if err != nil {
-			return Status{}, errors.Join(err, rollback())
-		}
-	}
 	for i, robot := range session.Robots {
-		vehiclePort, err := vehicleFactory.New(ctx, session, robot, attachments[i], section)
+		vehiclePort, err := vehicleFactory.New(ctx, session, robot, attachments[i], vehicleSection)
 		if err != nil {
 			return Status{}, errors.Join(err, rollback())
 		}
