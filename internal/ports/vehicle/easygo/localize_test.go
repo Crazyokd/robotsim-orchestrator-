@@ -149,6 +149,25 @@ func TestWaitForVehicleInitPollsUntilSucceeded(t *testing.T) {
 	}
 }
 
+func TestWaitForVehicleInitRetriesTransientErrors(t *testing.T) {
+	defer fastPolling(t)()
+	served := 0
+	server := statusServer(t, func(w http.ResponseWriter, r *http.Request) {
+		served++
+		if served < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, `{"data":{"system":{"initialization":{"result":"succeeded"}}}}`)
+	})
+	if err := waitForVehicleInit(context.Background(), server); err != nil {
+		t.Fatalf("expected transient errors to be retried: %v", err)
+	}
+	if served < 3 {
+		t.Fatalf("expected retries, served=%d", served)
+	}
+}
+
 func TestWaitForVehicleInitFailsOnFailed(t *testing.T) {
 	server := statusServer(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"data":{"system":{"initialization":{"result":"failed","step":"nav2_startup"}}}}`)

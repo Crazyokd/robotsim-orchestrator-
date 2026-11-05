@@ -54,23 +54,31 @@ func mapPose(world contract.Pose, offset OriginOffset) contract.Pose {
 func waitForVehicleInit(ctx context.Context, apiPort int) error {
 	deadline := time.Now().Add(appInitTimeout)
 	var last string
+	var lastErr error
 	for {
 		body, err := statusJSON(ctx, apiPort)
 		if err != nil {
-			return fmt.Errorf("wait for init on :%d: %w", apiPort, err)
+			// 车端 init 期间 HTTP 服务可能重启或尚未就绪：连接拒绝 / 5xx 都是
+			// 瞬态，重试到 deadline；只有明确报 failed 或契约破坏才致命。
+			lastErr = err
+		} else {
+			result, step, parseErr := initializationState(body)
+			if parseErr != nil {
+				return fmt.Errorf("wait for init on :%d: %w", apiPort, parseErr)
+			}
+			switch result {
+			case "succeeded":
+				return nil
+			case "failed":
+				return fmt.Errorf("wait for init on :%d: vehicle reports failed (step=%s)", apiPort, step)
+			}
+			last = result
+			lastErr = nil
 		}
-		result, step, err := initializationState(body)
-		if err != nil {
-			return fmt.Errorf("wait for init on :%d: %w", apiPort, err)
-		}
-		switch result {
-		case "succeeded":
-			return nil
-		case "failed":
-			return fmt.Errorf("wait for init on :%d: vehicle reports failed (step=%s)", apiPort, step)
-		}
-		last = result
 		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("wait for init on :%d: %w", apiPort, lastErr)
+			}
 			return fmt.Errorf("wait for init on :%d: still %s after %s", apiPort, last, appInitTimeout)
 		}
 		select {
