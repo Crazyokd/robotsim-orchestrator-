@@ -255,3 +255,14 @@ func TestSessionAcceptsNestedTopicPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDataVolumePrefixRequiresSingleRobot(t *testing.T) {
+	base := StartConfig{Robots: 1, World: "simple", AppImage: "img", EnvImage: "env", DataVolumePrefix: "ci-1"}
+	if err := base.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	base.Robots = 2
+	if err := base.Validate(); err == nil {
+		t.Fatal("expected error")
+	}
+}

@@ -184,3 +184,28 @@ func TestCallRejectsFlagsAndAnEmptyRequest(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestStartParsesDataVolumePrefix(t *testing.T) {
+	orch := &fakeOrch{}
+	var out bytes.Buffer
+	args := []string{"start", "--robots", "1", "--world", "simple", "--app-image", "runtime-sim:v1", "--data-volume-prefix", "ci-9"}
+	if err := Run(args, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch); err != nil {
+		t.Fatal(err)
+	}
+	if orch.started.DataVolumePrefix != "ci-9" {
+		t.Fatalf("cfg=%+v", orch.started)
+	}
+}
+
+func TestStartDataVolumePrefixDefaultsFromEnv(t *testing.T) {
+	t.Setenv("SIMENV_DATA_VOLUME_PREFIX", "ci-env-1")
+	orch := &fakeOrch{}
+	var out bytes.Buffer
+	args := []string{"start", "--robots", "1", "--world", "simple", "--app-image", "runtime-sim:v1"}
+	if err := Run(args, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch); err != nil {
+		t.Fatal(err)
+	}
+	if orch.started.DataVolumePrefix != "ci-env-1" {
+		t.Fatalf("cfg=%+v", orch.started)
+	}
+}

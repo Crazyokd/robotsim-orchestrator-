@@ -1103,3 +1103,31 @@ func writeWorldAsset(t *testing.T, dir, name string, content []byte) {
 		t.Fatal(err)
 	}
 }
+
+func TestStartWithDataVolumePrefixBindsOnlyTheVolume(t *testing.T) {
+	report, _ := json.Marshal(world.ReadyReport{World: "map_world", Clock: true, Robots: []string{"robot1"}})
+	engine := &fakeEngine{infos: map[string]ContainerInfo{}, ready: string(report)}
+	orch := Orchestrator{Engine: engine, AppReady: alwaysReady}
+	if _, err := orch.Start(context.Background(), contract.StartConfig{
+		Robots: 1, World: "simple", AppImage: "runtime-sim:tag", EnvImage: "simenv-world:local",
+		Partition: contract.DefaultPartition, DataVolumePrefix: "ci-7",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var app *ContainerSpec
+	for i, spec := range engine.started {
+		if spec.Labels[contract.LabelRole] == contract.RoleApp {
+			app = &engine.started[i]
+		}
+	}
+	if app == nil {
+		t.Fatal("no app container started")
+	}
+	want := []string{"ci-7-robot1:/sros"}
+	if !slices.Equal(app.Binds, want) {
+		t.Fatalf("binds=%v, want exactly %v", app.Binds, want)
+	}
+	if _, err := os.Stat(filepath.Join(os.TempDir(), appConfigHostDir)); err == nil {
+		t.Fatal("volume mode must not stage app-config on the host filesystem")
+	}
+}

@@ -39,16 +39,22 @@ type Robot struct {
 }
 
 type StartConfig struct {
-	Robots       int
-	World        string
-	AppImage     string
-	EnvImage     string
-	Partition    string
-	DataRoot     string
-	Poses        []Pose
-	RvizRobots   []int
-	GzGuiRobots  []int
-	CameraRobots []int
+	Robots    int
+	World     string
+	AppImage  string
+	EnvImage  string
+	Partition string
+	DataRoot  string
+	// DataVolumePrefix 非空时每辆车一个 named volume（<prefix>-<robotName>:/sros），
+	// 代替宿主机 data-root 绑定。用于 simenv 进程与 Docker daemon 不共享文件系统
+	// 的环境（CI runner 容器）：bind 源由 daemon 自管，不解析宿主机路径。
+	// 该形态只支持单车——车辆身份由 launch 的 SERIAL_NUMBER 播种，多车需要的
+	// per-robot registry 补丁文件无法经 volume 子路径注入。
+	DataVolumePrefix string
+	Poses            []Pose
+	RvizRobots       []int
+	GzGuiRobots      []int
+	CameraRobots     []int
 }
 
 // WantsRviz reports whether the given robot index was asked to run RViz.
@@ -120,6 +126,9 @@ func (c StartConfig) Validate() error {
 	}
 	if err := validateViewerRobots("cameras", c.CameraRobots, c.Robots); err != nil {
 		return err
+	}
+	if strings.TrimSpace(c.DataVolumePrefix) != "" && c.Robots != 1 {
+		return fmt.Errorf("data-volume-prefix supports exactly one robot, got %d", c.Robots)
 	}
 	return nil
 }

@@ -48,10 +48,13 @@ const (
 	// every robot link mesh fails to load and the vehicle renders as nothing.
 	appGZResourcePath = "/opt/sros/share:/opt/sros/share/easygo_sim_bringup/models"
 
-	// appRegistryDir is where the app image keeps its parameter registry. simenv
-	// overrides individual files inside it instead of replacing the directory,
-	// so every other default the image ships stays authoritative.
-	appRegistryDir = "/opt/sros/share/easygo-app/cfg"
+	// appRegistryDir is where the app image keeps its parameter registry. The
+	// registry ships with the easygo-param-manager deb, not easygo-app; the
+	// runtime launch reads this same path unless EASYGO_SIM_APP_CONFIG_DIR /
+	// PARAM_CFG_DIR overrides it, so a bind here reaches the live defaults.
+	// simenv overrides individual files inside it instead of replacing the
+	// directory, so every other default the image ships stays authoritative.
+	appRegistryDir = "/opt/sros/share/easygo-param-manager/cfg"
 	// appConfigHostDir holds, per robot, the registry files simenv overrides.
 	appConfigHostDir = "app-config"
 
@@ -536,30 +539,47 @@ func (v EasyGoVehicle) Start(ctx context.Context) error {
 		return err
 	}
 	cfg := withDefaults(v.Config)
-	dataRoot := cfg.DataRoot
-	if dataRoot == "" {
-		cache, err := os.UserCacheDir()
-		if err != nil {
-			return err
-		}
-		dataRoot = filepath.Join(cache, "simenv")
-	}
-	hostSros := filepath.Join(dataRoot, v.Robot.Name)
-	if err := os.MkdirAll(hostSros, 0o755); err != nil {
-		return err
-	}
-	appConfigBinds, err := v.initializeAppConfig(ctx, cfg, hostSros)
-	if err != nil {
-		return err
-	}
 	runtime := easyGoRuntimeFor(v.Robot.Index)
 	useRviz := cfg.WantsRviz(v.Robot.Index)
 	useGzGui := cfg.WantsGzGui(v.Robot.Index)
 	useCameras := cfg.WantsCameras(v.Robot.Index)
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, easyGoLaunchArgs(v.Robot, runtime, useRviz, useGzGui, useCameras)...)
-	binds := append([]string{hostSros + ":/sros"}, appConfigBinds...)
-	if handover := worldHandoverBind(v.AssetsDir, v.Session.World); handover != "" {
-		binds = append(binds, handover)
+	var binds []string
+	if prefix := strings.TrimSpace(cfg.DataVolumePrefix); prefix != "" {
+		// Volume 形态：daemon 自管数据卷，首次挂载继承镜像 /sros（0777，
+		// 车端 std 可写）。registry 补丁与世界 SDF handover 都依赖宿主机
+		// 路径绑定，此形态下一律不挂——车辆身份由 launch 的 SERIAL_NUMBER
+		// 播种（单车无 sync 端口冲突），世界 SDF 用车端镜像自带那份
+		// （与环境 pinned 资产同源）。
+		binds = append(binds, prefix+"-"+v.Robot.Name+":/sros")
+	} else {
+		dataRoot := cfg.DataRoot
+		if dataRoot == "" {
+			cache, err := os.UserCacheDir()
+			if err != nil {
+				return err
+			}
+			dataRoot = filepath.Join(cache, "simenv")
+		}
+		hostSros := filepath.Join(dataRoot, v.Robot.Name)
+		if err := os.MkdirAll(hostSros, 0o755); err != nil {
+			return err
+		}
+		// The vehicle process runs as the image's std user (uid 1000) while
+		// simenv may run as another uid (CI runs as root). The bind target
+		// must stay writable for the vehicle, otherwise its launch refuses
+		// to start.
+		if err := os.Chmod(hostSros, 0o777); err != nil {
+			return fmt.Errorf("make %s writable for the vehicle user: %w", hostSros, err)
+		}
+		appConfigBinds, err := v.initializeAppConfig(ctx, cfg, hostSros)
+		if err != nil {
+			return err
+		}
+		binds = append([]string{hostSros + ":/sros"}, appConfigBinds...)
+		if handover := worldHandoverBind(v.AssetsDir, v.Session.World); handover != "" {
+			binds = append(binds, handover)
+		}
 	}
 	if useGzGui {
 		if bind := gzGuiAssetBind(); bind != "" {

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -101,6 +102,7 @@ func parseStart(args []string) (contract.StartConfig, error) {
 	envImage := fs.String("env-image", contract.DefaultEnvImage, "")
 	partition := fs.String("partition", contract.DefaultPartition, "")
 	dataRoot := fs.String("data-root", "", "")
+	dataVolumePrefix := fs.String("data-volume-prefix", os.Getenv("SIMENV_DATA_VOLUME_PREFIX"), "")
 	posesText := fs.String("poses", "", "")
 	rvizText := fs.String("rviz", "", "")
 	gzGuiText := fs.String("gz-gui", "", "")
@@ -128,16 +130,17 @@ func parseStart(args []string) (contract.StartConfig, error) {
 		return contract.StartConfig{}, err
 	}
 	return contract.StartConfig{
-		Robots:       *robots,
-		World:        *worldName,
-		AppImage:     *appImage,
-		EnvImage:     *envImage,
-		Partition:    *partition,
-		DataRoot:     *dataRoot,
-		Poses:        poses,
-		RvizRobots:   rvizRobots,
-		GzGuiRobots:  gzGuiRobots,
-		CameraRobots: cameraRobots,
+		Robots:           *robots,
+		World:            *worldName,
+		AppImage:         *appImage,
+		EnvImage:         *envImage,
+		Partition:        *partition,
+		DataRoot:         *dataRoot,
+		DataVolumePrefix: *dataVolumePrefix,
+		Poses:            poses,
+		RvizRobots:       rvizRobots,
+		GzGuiRobots:      gzGuiRobots,
+		CameraRobots:     cameraRobots,
 	}, nil
 }
 
