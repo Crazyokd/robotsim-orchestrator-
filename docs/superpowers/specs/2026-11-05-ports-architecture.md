@@ -10,7 +10,7 @@
 - 组合根（`cmd/simenv`）加一行注册；
 - 新实现 = 一个新包。
 
-**非目标**：不做动态插件加载；单实现期间不加 `--world-port` / `--vehicle-port` 选择 flag；不替「世界 × 车端」配对抽象协议——车端要学会说哪个仿真器的话是车端的事（§7）。
+**非目标**：不做动态插件加载；不替「世界 × 车端」配对抽象协议——车端要学会说哪个仿真器的话是车端的事（§7）。种类选择不加独立的 `--world-port` 式 flag：种类由 bundle 推导，显式 `--world-kind` / `--vehicle-kind` 只服务裸世界（§12）。
 
 ## 2. 已拍板的决定（2026-11-05）
 
@@ -41,6 +41,8 @@ internal/ports/world/gazebo/process 容器侧 Process · GZ · SDF 重写（现 
 internal/ports/vehicle/easygo       EasyGoVehicle、factory、端口算术、registry 补丁、
                                     地图导入/站点/初始位姿客户端、世界系→地图系换算
 internal/ports/vehicle/easygo/gazebo.go  EasyGo-on-Gazebo 配对：launch 参数、GZ 环境变量、世界 SDF 交接 bind
+internal/ports/world/null           第二个世界实现：状态文件，零容器（§12）
+internal/ports/vehicle/null         第二个车端实现：状态文件，零容器（§12）
 ```
 
 依赖方向唯一：`ports/** → orchestrator → contract`。Go 循环引用禁止保证框架回不了头。
@@ -87,7 +89,8 @@ deploy/assets/worlds/corridor/
 type Attachment interface{ Kind() string }   // 世界 Port 产出，框架只按车转交
 
 type WorldPort interface {
-    Start(ctx, contract.Session) ([]Attachment, error)   // 每车一个
+    Kind() string                                    // bundle worlds.<kind> 节与会话标记按它路由
+    Start(ctx, contract.Session, assets.Section) ([]Attachment, error)   // 每车一个 Attachment；节即 worlds.<kind>
     Ready(ctx, contract.Session) (WorldReady, error)
     Status(ctx) (WorldStatus, error)
     Stop(ctx) error
@@ -99,6 +102,7 @@ type WorldStatus struct{ Present, Running bool; Ready WorldReady; Detail map[str
 type EntityPose  struct{ Robot int; Entity string; Pose contract.Pose }   // 世界系
 
 type VehicleFactory interface {
+    Kind() string                                  // bundle vehicles.<kind> 节按它取
     New(ctx, contract.Session, contract.Robot, Attachment, assets.Section) (VehiclePort, error)
     Discover(ctx) ([]VehiclePort, error)
 }
@@ -111,8 +115,8 @@ type VehiclePort interface {
     Forward(ctx, request []byte) ([]byte, error)   // call --robot：字节原样进出，框架不解析
 }
 type Provisioning struct {
-    Stations []contract.Station   // 世界系
-    Pose     contract.Pose        // 世界系
+    Stations []assets.Station   // 世界系
+    Pose     contract.Pose      // 世界系
 }
 type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail map[string]string }
 ```
@@ -121,22 +125,28 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 - `Status` 不再有 `APIPort` / `Image` 字段；实现专属信息进 `Detail`，CLI 原样打印。
 - `worldInit` 变通用：bundle → 按 kind 取节 → 每台车一次 `Provision`。任一步失败即回滚（沿用现状）。
 - 控制面只路由不解析：`pose` / `reset` 的世界系位姿交给 `WorldPort`；`call --robot` 的字节交给该车的 `Forward`。怎么 dial、什么协议是车端 Port 自己的事。
-- `StartConfig` 只剩 `World / Robots / Poses`；`--poses` 与 bundle `initial_poses` 同给时报错。
+- `StartConfig` 只剩 `World / Robots / Poses / WorldKind / VehicleKind`；`--poses` 与 bundle `initial_poses` 同给时报错。
+- 两个种类的节（`worlds.<kind>` / `vehicles.<kind>`）在碰任何运行态之前取好：缺节即失败，且不先杀掉旧会话。
+- **发现路径零参数**：`Status` / `Stop` / `Discover` / `Pose` / `Reset` / `Forward` 拿不到 start 的参数，Port 的发现与停止不得在运行期依赖 start-time Options（null 对因此零参数，§12）。
 
 ## 7. 配对：Attachment 是显式的
 
 世界 Port 启动后产出每车的 `Attachment`；车端 `Factory.New` 收到后 type-switch：
 
 - 认得 → 继续；不认得或缺它那种资产节 → **报错**。
+- 配对约定双向落实：车端断言世界产出的具体 Attachment 类型，`Kind()` 不一致在 `Factory.New` 即失败；每种车端对每种已知世界各有一条配对测试（包括「easygo 拒绝 null 世界」这样的反向用例）。
 - `ports/vehicle/easygo` import `ports/world/gazebo` 拿 `gazebo.Attachment{Partition, TopicPrefix, IP}`——EasyGo-on-Gazebo 是一个配对，import 是有意为之。
 - Gazebo Port 的容器进程、`--cameras`、partition 常量、`robotN` 话题前缀全部留在 `ports/world/gazebo`；`GZ_IP` / `GZ_PARTITION` 是它的约定，不是仓库级约定。
 
 ## 8. 配置与 flag
 
-各 Port 暴露 `Options` 与 `RegisterFlags(*flag.FlagSet) *Options`；组合根把各组挂到同一个 FlagSet：
+各 Port 暴露 `Options` 与 `RegisterFlags(*flag.FlagSet) *Options`（零参数实现不挂 flag）；组合根把各组挂到同一个 FlagSet：
 
 - `gazebo.Options{EnvImage, CameraRobots}` —— `--env-image` 必填
 - `easygo.Options{AppImage, DataRoot, RvizRobots, GzGuiRobots}` —— `--app-image` 必填（gz-gui 跑在车端容器内，归车端）
+- 框架侧 `--world-kind` / `--vehicle-kind`：bundle 有对应节时由唯一键推导、给了必须一致；裸世界必填（§12）
+
+容器运行时惰性构造：裸世界（`--world null` 这种无 bundle 的）起停与 `pose`/`reset`/`call` 不碰 Docker。
 
 `withDefaults` 四处全删；`--world` 不给即报错。`assetsPath` / `gzGuiAssetBind` 两套解析并为 `internal/assets` 一处；缺文件是错误，不再返回空串。车端 HTTP 客户端带超时；CLI 给 `start` 配 context 超时。
 
@@ -182,3 +192,22 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 - 代码：`go test ./...`；改入口或镜像时 `go build` 两个二进制 + `docker build -f deploy/Dockerfile -t simenv-world-gazebo:local .`。
 - 框架守卫：`! rg -n "gazebo|gz|easygo|docker|ros" internal/contract internal/orchestrator internal/assets internal/cli`（大小写不敏感、排除注释豁免名单）进 CI lint。
 - N=1 门禁：`simenv start` 退出 0；GZ `clock` 与实体 `robot1`；程序 API `:18189` 可达；`status` 分开报告；`stop` 停干净。
+
+## 12. 第二个实现：null 对与种类路由（2026-11-05 增补）
+
+本合同 §3 的完成判据 3（「新增 Port = 新包 + 组合根一行」）当时只有 gazebo/easygo 一对实现，未被第二个实现检验。`internal/ports/world/null` 与 `internal/ports/vehicle/null` 是第二对：状态文件世界 + 状态文件车端，零容器、零外部进程，既是架构自检，也是无 Docker 的开发模式（`./simenv start --world nullworld --robots 2`，bundle 见 `deploy/assets/worlds/nullworld/`）。第二对落地后，「加实现」的实际成本是：两个新包 + 组合根注册表两行 + 一个 bundle 目录；框架四包零改动（守卫 grep 保持 exit 1）。这轮检验逼出并落实了三条规则：
+
+### 12.1 种类选择与会话标记
+
+- `Orchestrator` 持有种类注册表（`map[kind]constructor`），由组合根注入。种类选择规则：bundle 有对应节 → 唯一键即种类（单一来源）；bundle 该 map 为空 → 裸世界，必须显式给 kind flag；显式 flag 与 bundle 唯一键不一致 → 报错。**未被选中的实现不被构造**——status 一个 null 会话不得拉起 Docker client。
+- 会话标记：`$XDG_CACHE_HOME/simenv/session.json` 只记 `{world_kind, vehicle_kind}`，start 成功才写、stop 全停干净才摘、损坏即报错（含路径）。start 前按标记先停上次会话；status/stop/pose/reset/call 按标记构造选中实现。框架不逐实现盲探「谁活着」。
+
+### 12.2 发现路径零参数
+
+`Status` / `Stop` / `Discover` 由标记驱动，拿不到 start 的参数；因此 Port 的发现与停止不得在运行期依赖 start-time Options。null 对因此做成零参数（状态目录固定 `XDG_CACHE_HOME` 下），gazebo/easygo 的 Discover/Stop 本来就只靠标签与容器名，天然满足。
+
+### 12.3 一个世界不必服务所有种类
+
+bundle 只为它声明的种类供节。nullworld 只有 `worlds.null` / `vehicles.null`，不应被迫长出假 gazebo/easygo 节。资产一致性测试相应改为：无本 kind 节即跳过，但至少一个世界必须服务本 kind。
+
+明确不做的：不给容器打 kind 标签做「第三种 docker 实现」的自动识别——世界种类从会话标记来，不从 Docker 状态推导。

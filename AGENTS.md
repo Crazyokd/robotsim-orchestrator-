@@ -5,7 +5,8 @@
 ## 边界
 
 - **本仓**：机器人仿真编排框架 + 当前内置的 Gazebo 世界 Port 与 EasyGo 车端 Port。框架不解释任何一种仿真器或车端；Gazebo server、world SDF、机器人模型、spawn、GZ `clock` 是 Gazebo Port 的实现细节。框架层不起 easygo-app / SLAM / Nav2 / WebApp / 驾驶台 / RViz。
-- **新增实现**：新增仿真实现或车端实现 = 新增一个 `internal/ports/**` 包 + `cmd/simenv` 组合根加一行注册。框架（`internal/contract`、`internal/orchestrator`、`internal/assets`、`internal/cli`）一行不改。
+- **新增实现**：新增仿真实现或车端实现 = 新增一个 `internal/ports/**` 包 + `cmd/simenv` 组合根注册表加一行。框架（`internal/contract`、`internal/orchestrator`、`internal/assets`、`internal/cli`）一行不改。`internal/ports/{world,vehicle}/null` 是零容器的状态文件对：无 Docker 开发模式，也是这条规则的架构自检。
+- **种类路由**：实现种类（kind）由 bundle `worlds`/`vehicles` 唯一键推导；裸世界必须显式给 `--world-kind` / `--vehicle-kind`。运行中的会话种类记在 `$XDG_CACHE_HOME/simenv/session.json`，status/stop/pose/reset/call 按它路由，未选中的实现不被构造，不逐实现盲探。Port 的发现与停止不得依赖 start-time 参数（发现路径拿不到它们）。
 - **程序**：现有 EasyGo `runtime-sim` + `sim_easygo.launch.py start_gazebo:=false`。由 `--app-image` 传入。程序不读本仓源码，不起 Gazebo server。
 - 两边不共享镜像、不共享 launch、不共享版本号。环境镜像不以 `runtime-sim` 为 `FROM`。运行时不挂 EasyGo 工作区。
 - **会话契约**：`Session` 只含 `World`、`Robots`；Robot 只含 `Index`、`Name`、`Pose`（世界系，m / rad）。`Partition`、`TopicPrefix` 是 Gazebo Port 的接线约定，经 `Attachment` 交给车端，不进契约。
@@ -33,6 +34,7 @@
 - 代码：`go test ./...`；改入口或镜像时 `go build -o simenv ./cmd/simenv` 与 `go build -o simenv-world-gazebo ./cmd/simenv-world-gazebo`，需要环境镜像时 `docker build -f deploy/Dockerfile -t simenv-world-gazebo:local .`。
 - 框架守卫：`! rg -in "gazebo|gz|easygo|docker|ros" internal/contract internal/orchestrator internal/assets internal/cli`。
 - N=1 真跑门禁（环境具备时）：`simenv start` 退出 0；环境有 GZ `clock` 与实体 `robot1`、进程无 easygo-app；程序 `GET http://127.0.0.1:18189/api/v6/vehicle/status` 可达；`status` 分开报告；`stop` 停干净。本机没 Gazebo / `runtime-sim` 时写明未验证，禁止把「没跑多车」写成环境缺陷。
+- 无 Docker 冒烟：`./simenv start --world nullworld --robots 2`（null 对零参数，镜像 flag 只对 gazebo/easygo 生效）→ `status` / `pose` / `reset` / `call` / `stop` 全链路应可用。
 
 ### 按项目 skill 做事时：必须交「skill 执行记录」
 
