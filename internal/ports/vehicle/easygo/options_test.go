@@ -25,6 +25,26 @@ func TestRegisterFlagsParsesVehicleOptions(t *testing.T) {
 	}
 }
 
+func TestRegisterFlagsDataVolumePrefix(t *testing.T) {
+	t.Setenv("SIMENV_DATA_VOLUME_PREFIX", "ci-from-env")
+	fs := flag.NewFlagSet("start", flag.ContinueOnError)
+	options := RegisterFlags(fs)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	if options.DataVolumePrefix != "ci-from-env" {
+		t.Fatalf("env fallback: prefix=%q", options.DataVolumePrefix)
+	}
+	fs2 := flag.NewFlagSet("start", flag.ContinueOnError)
+	options2 := RegisterFlags(fs2)
+	if err := fs2.Parse([]string{"--data-volume-prefix", "ci-flag"}); err != nil {
+		t.Fatal(err)
+	}
+	if options2.DataVolumePrefix != "ci-flag" {
+		t.Fatalf("flag wins over env: prefix=%q", options2.DataVolumePrefix)
+	}
+}
+
 func TestOptionsRequireAnAppImage(t *testing.T) {
 	if err := (Options{}).Validate(); err == nil {
 		t.Fatal("app-image is required")

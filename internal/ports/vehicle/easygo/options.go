@@ -3,6 +3,7 @@ package easygo
 import (
 	"flag"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -14,6 +15,11 @@ type Options struct {
 	AppImage string
 	// DataRoot 是车端数据在宿主机的根目录（空则用用户缓存目录）。
 	DataRoot string
+	// DataVolumePrefix 非空时改走 daemon 自管 named volume（每车
+	// <prefix>-<robot>），与 daemon 不共享文件系统的环境（CI docker
+	// executor 里 simenv 跑在 runner 容器）必须用它：bind 源由 daemon 在
+	// 宿主机解析，simenv 侧的路径在宿主机上根本不存在。
+	DataVolumePrefix string
 	// RvizRobots / GzGuiRobots 是要开对应 viewer 的车序号。
 	RvizRobots  []int
 	GzGuiRobots []int
@@ -24,6 +30,7 @@ func RegisterFlags(fs *flag.FlagSet) *Options {
 	options := &Options{}
 	fs.StringVar(&options.AppImage, "app-image", "", "")
 	fs.StringVar(&options.DataRoot, "data-root", "", "")
+	fs.StringVar(&options.DataVolumePrefix, "data-volume-prefix", os.Getenv("SIMENV_DATA_VOLUME_PREFIX"), "")
 	fs.Var((*robotIndices)(&options.RvizRobots), "rviz", "")
 	fs.Var((*robotIndices)(&options.GzGuiRobots), "gz-gui", "")
 	return options

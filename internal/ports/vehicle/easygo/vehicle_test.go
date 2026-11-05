@@ -414,6 +414,35 @@ func TestStartHandsTheWorldFileToTheAppContainer(t *testing.T) {
 	}
 }
 
+// daemon 隔离环境（CI docker executor：simenv 跑在 runner 容器，bind 源由
+// daemon 在宿主机解析）必须走 named volume：数据卷 daemon 自管，registry 与
+// SDF 的宿主文件 bind 一律不挂。
+func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
+	dir := t.TempDir()
+	writeWorldSDF(t, dir, "simple")
+	dataRoot := t.TempDir()
+	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+	factory := Factory{
+		Engine:    engine,
+		Options:   Options{AppImage: "runtime-sim:tag", DataRoot: dataRoot, DataVolumePrefix: "ci-1"},
+		AssetsDir: dir,
+	}
+	session := contract.Session{World: "simple", Robots: []contract.Robot{{Index: 1, Name: "robot1"}}}
+	vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vehicle.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := engine.started[0].Binds, []string{"ci-1-robot1:/sros"}; !slices.Equal(got, want) {
+		t.Fatalf("binds=%v, want exactly %v", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(dataRoot, "robot1")); !os.IsNotExist(err) {
+		t.Fatalf("volume form must not stage host dirs under %s: %v", dataRoot, err)
+	}
+}
+
 func TestWorldHandoverBindSkipsWorldsTheEnvironmentDoesNotShip(t *testing.T) {
 	dir := t.TempDir()
 	writeWorldSDF(t, dir, "corridor")

@@ -65,32 +65,43 @@ func (v Vehicle) Start(ctx context.Context) error {
 	useRviz := v.Options.wantsRviz(v.Robot.Index)
 	useGzGui := v.Options.wantsGzGui(v.Robot.Index)
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, launchArgs(v.Robot, v.Link.TopicPrefix, runtime, useRviz, useGzGui, v.Link.Cameras)...)
-	dataRoot := v.Options.DataRoot
-	if dataRoot == "" {
-		cache, err := os.UserCacheDir()
+	var binds []string
+	if prefix := strings.TrimSpace(v.Options.DataVolumePrefix); prefix != "" {
+		// Volume 形态：daemon 自管数据卷，首次挂载继承镜像 /sros（0777，车端
+		// std 可写）。registry 补丁与世界 SDF handover 都依赖宿主机路径绑定
+		// （daemon 与 simenv 不共享文件系统时，宿主上路径不存在，文件 bind 会
+		// 被 daemon 建成目录再挂到文件目标而失败），此形态下一律不挂——车辆
+		// 身份由 launch 的 SERIAL_NUMBER 播种（单车无 sync 端口冲突），世界
+		// SDF 用车端镜像自带那份（与环境 pinned 资产同源）。
+		binds = append(binds, prefix+"-"+v.Robot.Name+":"+runtimeRoot)
+	} else {
+		dataRoot := v.Options.DataRoot
+		if dataRoot == "" {
+			cache, err := os.UserCacheDir()
+			if err != nil {
+				return err
+			}
+			dataRoot = filepath.Join(cache, "simenv")
+		}
+		hostSros := filepath.Join(dataRoot, v.Robot.Name)
+		if err := os.MkdirAll(hostSros, 0o755); err != nil {
+			return err
+		}
+		// The vehicle process runs as the image's std user (uid 1000) while
+		// simenv may run as another uid (CI runs as root). The bind target
+		// must stay writable for the vehicle, otherwise its launch refuses
+		// to start.
+		if err := os.Chmod(hostSros, 0o777); err != nil {
+			return fmt.Errorf("make %s writable for the vehicle user: %w", hostSros, err)
+		}
+		appConfigBinds, err := v.initializeAppConfig(ctx, v.Options.AppImage, hostSros)
 		if err != nil {
 			return err
 		}
-		dataRoot = filepath.Join(cache, "simenv")
-	}
-	hostSros := filepath.Join(dataRoot, v.Robot.Name)
-	if err := os.MkdirAll(hostSros, 0o755); err != nil {
-		return err
-	}
-	// The vehicle process runs as the image's std user (uid 1000) while
-	// simenv may run as another uid (CI runs as root). The bind target
-	// must stay writable for the vehicle, otherwise its launch refuses
-	// to start.
-	if err := os.Chmod(hostSros, 0o777); err != nil {
-		return fmt.Errorf("make %s writable for the vehicle user: %w", hostSros, err)
-	}
-	appConfigBinds, err := v.initializeAppConfig(ctx, v.Options.AppImage, hostSros)
-	if err != nil {
-		return err
-	}
-	binds := append([]string{hostSros + ":" + runtimeRoot}, appConfigBinds...)
-	if handover := worldHandoverBind(v.AssetsDir, v.Session.World); handover != "" {
-		binds = append(binds, handover)
+		binds = append([]string{hostSros + ":" + runtimeRoot}, appConfigBinds...)
+		if handover := worldHandoverBind(v.AssetsDir, v.Session.World); handover != "" {
+			binds = append(binds, handover)
+		}
 	}
 	if useGzGui {
 		bind, err := gzGuiAssetBind(v.AssetsDir)
