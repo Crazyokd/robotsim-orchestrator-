@@ -26,7 +26,7 @@ func launchArgs(robot contract.Robot, topicPrefix string, runtime vehicleRuntime
 		fmt.Sprintf("api_port:=%d", runtime.apiPort),
 		fmt.Sprintf("voice_port:=%d", runtime.voicePort),
 		fmt.Sprintf("mqtt_port:=%d", runtime.mqttPort),
-		fmt.Sprintf("slam_web_port:=%d", slamWebPort(robot.Index)),
+		fmt.Sprintf("slam_web_port:=%d", runtime.slamWebPort),
 		fmt.Sprintf("observe_port:=%d", runtime.observePort),
 		fmt.Sprintf("webgz_web_port:=%d", runtime.webGZWebPort),
 		fmt.Sprintf("webgz_rfb_port:=%d", runtime.webGZRFBPort),
@@ -66,7 +66,7 @@ func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRunti
 		"ENABLE_MULTI_AMR_AVOIDANCE": "true",
 		// The sync service advertises this port for mDNS discovery. The launch
 		// owns PORT (the app's HTTP port); only mDNS needs a per-robot offset.
-		"MDNS_PORT": strconv.Itoa(mdnsPortBase + (robot.Index-1)*syncPortStride),
+		"MDNS_PORT": strconv.Itoa(runtime.mdnsPort),
 	}
 }
 

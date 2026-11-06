@@ -16,7 +16,7 @@ func (w DockerWorld) Pose(ctx context.Context, robot int) (orchestrator.EntityPo
 	if err != nil {
 		return orchestrator.EntityPose{}, err
 	}
-	out, err := w.Engine.Exec(ctx, WorldContainer, process.PoseInfoCommand(ready.World))
+	out, err := w.Engine.Exec(ctx, w.containerName(), process.PoseInfoCommand(ready.World))
 	if err != nil {
 		return orchestrator.EntityPose{}, fmt.Errorf("read pose for %s: %w", entity, err)
 	}
@@ -33,7 +33,7 @@ func (w DockerWorld) Reset(ctx context.Context, robot int, pose contract.Pose) (
 	if err != nil {
 		return orchestrator.EntityPose{}, err
 	}
-	out, err := w.Engine.Exec(ctx, WorldContainer, process.SetPoseCommand(ready.World, entity, pose))
+	out, err := w.Engine.Exec(ctx, w.containerName(), process.SetPoseCommand(ready.World, entity, pose))
 	if err != nil {
 		return orchestrator.EntityPose{}, fmt.Errorf("reset %s: %w", entity, err)
 	}
@@ -47,7 +47,7 @@ func (w DockerWorld) runningEntity(ctx context.Context, robot int) (process.Read
 	if robot < 1 {
 		return process.ReadyReport{}, "", fmt.Errorf("robot index must be >= 1")
 	}
-	ready, err := readReady(ctx, w.Engine)
+	ready, err := readReady(ctx, w.Engine, w.containerName())
 	if err != nil {
 		return process.ReadyReport{}, "", err
 	}

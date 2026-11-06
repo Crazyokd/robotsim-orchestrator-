@@ -56,6 +56,7 @@ const Kind = "easygo"
 const (
 	vehicleRobotLabel = "simenv.robot"
 	vehicleIndexLabel = "simenv.robot.index"
+	sessionLabel      = "simenv.session"
 )
 
 // Section 是 bundle vehicles.easygo 节严格解析后的样子：EasyGo 车端要灌的
@@ -97,6 +98,9 @@ type Factory struct {
 	// AppReady 是 WaitReady 的探活钩子（测试用）；nil 用真的 HTTP 探测。
 	AppReady  func(ctx context.Context, apiPort int) error
 	AssetsDir string
+	// SessionName / Slot 是编排交给本工厂的会话身份。
+	SessionName string
+	Slot        int
 }
 
 func (Factory) Kind() string { return Kind }
@@ -107,13 +111,15 @@ func (f Factory) New(_ context.Context, session contract.Session, robot contract
 		return nil, err
 	}
 	vehicle := Vehicle{
-		Engine:    f.Engine,
-		Options:   f.Options,
-		Session:   session,
-		Robot:     robot,
-		AppReady:  f.AppReady,
-		AssetsDir: f.AssetsDir,
-		Link:      link,
+		Engine:      f.Engine,
+		Options:     f.Options,
+		Session:     session,
+		Robot:       robot,
+		AppReady:    f.AppReady,
+		AssetsDir:   f.AssetsDir,
+		Link:        link,
+		SessionName: f.SessionName,
+		Slot:        f.Slot,
 	}
 	// 裸世界（无 bundle）没有车端节：不灌图、不定位，世界 SDF 交接照旧。
 	if len(rawSection) > 0 {
@@ -137,6 +143,8 @@ func (f Factory) newVehicle(session contract.Session, robot contract.Robot, cont
 		AppReady:      f.AppReady,
 		AssetsDir:     f.AssetsDir,
 		Link:          link,
+		SessionName:   f.SessionName,
+		Slot:          f.Slot,
 	}
 }
 
@@ -148,6 +156,9 @@ func (f Factory) Discover(ctx context.Context) ([]orchestrator.VehiclePort, erro
 	ports := make([]orchestrator.VehiclePort, 0, len(infos))
 	for _, info := range infos {
 		if info.Labels[docker.LabelManaged] != "true" || info.Labels[docker.LabelRole] != docker.RoleApp {
+			continue
+		}
+		if f.SessionName != "" && info.Labels[sessionLabel] != f.SessionName {
 			continue
 		}
 		robot, ok := robotFromLabels(info.Labels)

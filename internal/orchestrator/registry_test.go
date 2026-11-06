@@ -157,15 +157,15 @@ func TestRegistryStartFailsOnUnregisteredKind(t *testing.T) {
 
 func TestRegistryStartStopsThePreviouslyMarkedSession(t *testing.T) {
 	isolateMarker(t)
-	// 上一次会话的残留：标记写着 fake-world/fake，发现层还躺着一台 stale 车。
-	if err := saveSessionMarker(sessionMarker{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
+	// 同名再启动会先停掉这一路。名字空着的 save 记成 marker。
+	if err := saveSessionMarker(sessionRecord{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
 		t.Fatal(err)
 	}
 	r := newRegistryOrchestrator(t, t.TempDir())
 	stale := &fakeVehiclePort{status: VehicleStatus{Name: "robot9", Running: true}}
 	r.vehicleFactory.discovered = []*fakeVehiclePort{stale}
 	if _, err := r.Start(context.Background(), contract.StartConfig{
-		World: "noworld", Robots: 1, WorldKind: "fake-world", VehicleKind: "fake",
+		World: "noworld", Robots: 1, WorldKind: "fake-world", VehicleKind: "fake", SessionName: "marker",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestMarkedStatusWithoutMarkerConstructsNothing(t *testing.T) {
 
 func TestMarkedStatusRoutesByMarker(t *testing.T) {
 	isolateMarker(t)
-	if err := saveSessionMarker(sessionMarker{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
+	if err := saveSessionMarker(sessionRecord{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
 		t.Fatal(err)
 	}
 	r := newRegistryOrchestrator(t, t.TempDir())
@@ -241,7 +241,7 @@ func TestStopMarkedSession(t *testing.T) {
 		t.Fatal("stop without a session must not construct ports")
 	}
 	// 有标记：发现的车停掉、世界停掉、标记摘掉。
-	if err := saveSessionMarker(sessionMarker{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
+	if err := saveSessionMarker(sessionRecord{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
 		t.Fatal(err)
 	}
 	vehicle := &fakeVehiclePort{status: VehicleStatus{Name: "robot1", Running: true}}
@@ -261,9 +261,50 @@ func TestStopMarkedSession(t *testing.T) {
 	}
 }
 
+func TestTwoSessionsStopTheLatestAndLeaveTheOther(t *testing.T) {
+	isolateMarker(t)
+	if err := saveSessionMarker(sessionRecord{
+		Name: "alpha", WorldKind: "fake-world", VehicleKind: "fake", Slot: 1, StartedUnix: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSessionMarker(sessionRecord{
+		Name: "beta", WorldKind: "fake-world", VehicleKind: "fake", Slot: 2, StartedUnix: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := newRegistryOrchestrator(t, t.TempDir())
+	alpha := &fakeVehiclePort{status: VehicleStatus{Name: "robot1", Running: true}}
+	beta := &fakeVehiclePort{status: VehicleStatus{Name: "robot1", Running: true}}
+	r.vehicleFactory.discovered = []*fakeVehiclePort{beta}
+	if err := r.StopSession(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if !beta.stopped || !r.worldPort.stopped {
+		t.Fatal("latest session was not stopped")
+	}
+	records, err := loadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Name != "alpha" {
+		t.Fatalf("records=%+v", records)
+	}
+	if alpha.stopped {
+		t.Fatal("older session must stay")
+	}
+	listed, err := r.Sessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != "alpha" {
+		t.Fatalf("listed=%+v", listed)
+	}
+}
+
 func TestStopMarkedSessionKeepsMarkerOnFailure(t *testing.T) {
 	isolateMarker(t)
-	if err := saveSessionMarker(sessionMarker{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
+	if err := saveSessionMarker(sessionRecord{WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
 		t.Fatal(err)
 	}
 	r := newRegistryOrchestrator(t, t.TempDir())

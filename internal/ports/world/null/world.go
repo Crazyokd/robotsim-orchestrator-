@@ -34,7 +34,11 @@ type robotState struct {
 
 // World 是 null 世界 Port：Start 写状态文件，Ready/Status/Pose/Reset 读写它，
 // Stop 删它。状态目录就是真相——另一个 simenv 进程据此发现这次会话。
-type World struct{}
+// World 是 null 世界 Port。SessionName 空时状态文件仍是 world.json；
+// 有名字则各写一份，互不覆盖。
+type World struct {
+	SessionName string
+}
 
 func (World) Kind() string { return Kind }
 
@@ -42,6 +46,9 @@ func (w World) statePath() (string, error) {
 	root, err := dataRoot()
 	if err != nil {
 		return "", err
+	}
+	if w.SessionName != "" {
+		return filepath.Join(root, w.SessionName+".json"), nil
 	}
 	return filepath.Join(root, stateFileName), nil
 }

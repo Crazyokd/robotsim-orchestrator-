@@ -23,7 +23,7 @@ func (v Vehicle) Forward(ctx context.Context, request []byte) ([]byte, error) {
 	}
 	req.RequestURI = ""
 	req.URL.Scheme = "http"
-	req.URL.Host = fmt.Sprintf("127.0.0.1:%d", runtimeFor(v.Robot.Index).apiPort)
+	req.URL.Host = fmt.Sprintf("127.0.0.1:%d", v.runtime().apiPort)
 	req.Close = true
 	transport := &http.Transport{}
 	if v.Dial != nil {

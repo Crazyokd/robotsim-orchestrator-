@@ -40,27 +40,27 @@ func main() {
 	var vehicleOptions *easygo.Options
 	runner := orchestrator.Orchestrator{
 		Worlds: map[string]orchestrator.NewWorldFunc{
-			gazebo.Kind: func(contract.StartConfig) (orchestrator.WorldPort, error) {
+			gazebo.Kind: func(cfg contract.StartConfig) (orchestrator.WorldPort, error) {
 				engine, err := sharedEngine()
 				if err != nil {
 					return nil, err
 				}
-				return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions)}, nil
+				return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions), SessionName: cfg.SessionName}, nil
 			},
-			nullworld.Kind: func(contract.StartConfig) (orchestrator.WorldPort, error) {
-				return nullworld.World{}, nil
+			nullworld.Kind: func(cfg contract.StartConfig) (orchestrator.WorldPort, error) {
+				return nullworld.World{SessionName: cfg.SessionName}, nil
 			},
 		},
 		Vehicles: map[string]orchestrator.NewVehicleFactoryFunc{
-			easygo.Kind: func(contract.StartConfig) (orchestrator.VehiclePortFactory, error) {
+			easygo.Kind: func(cfg contract.StartConfig) (orchestrator.VehiclePortFactory, error) {
 				engine, err := sharedEngine()
 				if err != nil {
 					return nil, err
 				}
-				return easygo.Factory{Engine: engine, Options: deref(vehicleOptions)}, nil
+				return easygo.Factory{Engine: engine, Options: deref(vehicleOptions), SessionName: cfg.SessionName, Slot: cfg.Slot}, nil
 			},
-			nullvehicle.Kind: func(contract.StartConfig) (orchestrator.VehiclePortFactory, error) {
-				return nullvehicle.Factory{}, nil
+			nullvehicle.Kind: func(cfg contract.StartConfig) (orchestrator.VehiclePortFactory, error) {
+				return nullvehicle.Factory{SessionName: cfg.SessionName}, nil
 			},
 		},
 	}

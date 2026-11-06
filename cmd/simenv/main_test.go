@@ -114,21 +114,26 @@ func TestNullPairEndToEnd(t *testing.T) {
 			t.Fatalf("start output missing %q:\n%s", want, out)
 		}
 	}
-	// 状态文件落盘在缓存目录（参数无关，发现路径才找得到）：世界一个、每车一个。
-	worldState := filepath.Join(xdg, "simenv", "null", "world.json")
+	sessionName := sessionNameFrom(t, out)
+	// 状态文件按会话名落盘：世界一个、每车一个。
+	worldState := filepath.Join(xdg, "simenv", "null", sessionName+".json")
 	if _, err := os.Stat(worldState); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"robot1.json", "robot2.json"} {
-		if _, err := os.Stat(filepath.Join(xdg, "simenv", "null-vehicles", name)); err != nil {
+		if _, err := os.Stat(filepath.Join(xdg, "simenv", "null-vehicles", sessionName, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// status：另一次进程调用按会话标记路由到 null 种类。
+	// status：不点名只列会话；点名才展开到每台车。
 	out = mustRun(t, bin, env, "", "status")
-	if !strings.Contains(out, "connected=true") || !strings.Contains(out, "vehicle robot2") {
+	if !strings.Contains(out, "session "+sessionName) || !strings.Contains(out, "connected=true") || strings.Contains(out, "vehicle robot2") {
 		t.Fatalf("status output:\n%s", out)
+	}
+	out = mustRun(t, bin, env, "", "status", sessionName)
+	if !strings.Contains(out, "vehicle robot2") {
+		t.Fatalf("detail output:\n%s", out)
 	}
 
 	// pose / reset：位姿经状态文件跨进程持久化。
@@ -154,9 +159,23 @@ func TestNullPairEndToEnd(t *testing.T) {
 		t.Fatalf("world state not removed: %v", err)
 	}
 	out = mustRun(t, bin, env, "", "status")
-	if !strings.Contains(out, "connected=false") || strings.Contains(out, "vehicle robot1") {
+	if strings.TrimSpace(out) != "" {
 		t.Fatalf("status after stop:\n%s", out)
 	}
+}
+
+func sessionNameFrom(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "session ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[1] != "" {
+				return fields[1]
+			}
+		}
+	}
+	t.Fatalf("output has no session name:\n%s", out)
+	return ""
 }
 
 func TestStartRejectsKindMismatchAgainstBundle(t *testing.T) {

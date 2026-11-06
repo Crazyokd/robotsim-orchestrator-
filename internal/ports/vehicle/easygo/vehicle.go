@@ -26,10 +26,13 @@ var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // Vehicle 是一台 EasyGo 车的 Port：容器里跑 runtime-sim，宿主经 HTTP API 驱动它。
 type Vehicle struct {
-	Engine        docker.Engine
-	Options       Options
-	Session       contract.Session
-	Robot         contract.Robot
+	Engine  docker.Engine
+	Options Options
+	Session contract.Session
+	Robot   contract.Robot
+	// SessionName / Slot 由编排写入。名字空着时容器名不加前缀，那是未绑定会话的零值。
+	SessionName   string
+	Slot          int
 	ContainerName string
 	// AppReady 是 WaitReady 的探活钩子（测试用）；nil 用真的 HTTP 探测。
 	AppReady  func(ctx context.Context, apiPort int) error
@@ -60,7 +63,7 @@ func (v Vehicle) Start(ctx context.Context) error {
 			return fmt.Errorf("gz-gui robot %d outside robot count %d", index, len(v.Session.Robots))
 		}
 	}
-	runtime := runtimeFor(v.Robot.Index)
+	runtime := v.runtime()
 	useRviz := v.Options.wantsRviz(v.Robot.Index)
 	useGzGui := v.Options.wantsGzGui(v.Robot.Index)
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, launchArgs(v.Robot, v.Link.TopicPrefix, runtime, useRviz, useGzGui, v.Link.Cameras)...)
@@ -109,6 +112,15 @@ func (v Vehicle) Start(ctx context.Context) error {
 		}
 		binds = append(binds, bind)
 	}
+	labels := map[string]string{
+		docker.LabelManaged: "true",
+		docker.LabelRole:    docker.RoleApp,
+		vehicleRobotLabel:   v.Robot.Name,
+		vehicleIndexLabel:   strconv.Itoa(v.Robot.Index),
+	}
+	if v.SessionName != "" {
+		labels[sessionLabel] = v.SessionName
+	}
 	if err := v.Engine.Start(ctx, docker.ContainerSpec{
 		Name:    v.containerName(),
 		Image:   v.Options.AppImage,
@@ -118,12 +130,7 @@ func (v Vehicle) Start(ctx context.Context) error {
 		Network: "host",
 		Ipc:     "host",
 		Devices: guiDevices(useRviz || useGzGui),
-		Labels: map[string]string{
-			docker.LabelManaged: "true",
-			docker.LabelRole:    docker.RoleApp,
-			vehicleRobotLabel:   v.Robot.Name,
-			vehicleIndexLabel:   strconv.Itoa(v.Robot.Index),
-		},
+		Labels:  labels,
 	}); err != nil {
 		return err
 	}
@@ -138,7 +145,7 @@ func (v Vehicle) Status(ctx context.Context) (orchestrator.VehicleStatus, error)
 	return orchestrator.VehicleStatus{
 		Name:     v.Robot.Name,
 		Running:  info.Running,
-		Endpoint: fmt.Sprintf("http://127.0.0.1:%d", runtimeFor(v.Robot.Index).apiPort),
+		Endpoint: fmt.Sprintf("http://127.0.0.1:%d", v.runtime().apiPort),
 		Detail:   map[string]string{"container": info.Name, "image": info.Image},
 	}, nil
 }
@@ -153,7 +160,14 @@ func (v Vehicle) containerName() string {
 	if v.ContainerName != "" {
 		return v.ContainerName
 	}
-	return "simenv-" + v.Robot.Name
+	if v.SessionName == "" {
+		return "simenv-" + v.Robot.Name
+	}
+	return "simenv-" + v.SessionName + "-" + v.Robot.Name
+}
+
+func (v Vehicle) runtime() vehicleRuntime {
+	return runtimeFor(v.Robot.Index, v.Slot)
 }
 
 // WaitReady blocks until the vehicle's app answers on its API, so that a
@@ -163,7 +177,7 @@ func (v Vehicle) WaitReady(ctx context.Context) error {
 	if probe == nil {
 		probe = waitForAppAPI
 	}
-	if err := probe(ctx, runtimeFor(v.Robot.Index).apiPort); err != nil {
+	if err := probe(ctx, v.runtime().apiPort); err != nil {
 		return fmt.Errorf("wait for %s app: %w", v.Robot.Name, err)
 	}
 	return nil
@@ -228,7 +242,7 @@ func (v Vehicle) Provision(ctx context.Context, p orchestrator.Provisioning) err
 
 // seedMap imports a world map archive into the vehicle's easygo-app.
 func (v Vehicle) seedMap(ctx context.Context, archive []byte) error {
-	runtime := runtimeFor(v.Robot.Index)
+	runtime := v.runtime()
 	importURL := fmt.Sprintf("http://127.0.0.1:%d/api/v6/map/import", runtime.apiPort)
 
 	body := new(bytes.Buffer)
@@ -269,7 +283,7 @@ func (v Vehicle) localize(ctx context.Context, mapName string, pose contract.Pos
 	if err != nil {
 		return fmt.Errorf("localize %s: %w", v.Robot.Name, err)
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/v6/vehicle/localization/initial-pose", runtimeFor(v.Robot.Index).apiPort)
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v6/vehicle/localization/initial-pose", v.runtime().apiPort)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("localize %s: %w", v.Robot.Name, err)

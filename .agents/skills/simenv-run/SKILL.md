@@ -31,6 +31,8 @@ docker build -f deploy/Dockerfile -t simenv-world-gazebo:local .
 
 加 `--rviz` / `--gz-gui` 开观察视图（按车编号逗号分隔，如 `--rviz 1,3` 只给 robot1 和 robot3 开）：web-gz 3D 在 `http://127.0.0.1:6180/vnc.html`，RViz web 在 `http://127.0.0.1:6181/vnc.html`（端口按契约算术 `base+100N`）。默认 headless。
 
+可选 `--session <name>` 指定会话名。不写就生成一个，例如 `brisk-otter`，打在 start 的第一行。`simenv status` 列出全部会话，`simenv status <name>` 看这一路。`simenv stop` 停最近启动的那一路，`simenv stop <name>` 停指定的那一路。每个会话的容器名、GZ partition 和车端端口按名字错开。
+
 **gz-gui 一个就够，不要每车一个。** GUI 渲染的是整个世界，收到什么画什么——`--gz-gui 1` 的单窗口里所有车都在画面里，`WEBGZ_FOLLOW_TARGET` 只决定相机跟谁、不决定画谁。每多开一个 GUI 买到的只是一台额外的自动跟随镜头，代价是又一份全场景渲染（约 5.4 核 / 车）。RViz 则相反，它连的是各车独立的 ROS domain，只能看见自己那台车，所以要按车开。
 
 N=1 的 API 是 `http://127.0.0.1:18189/api/v6`，不是 `:18089`。

@@ -18,7 +18,10 @@ import (
 )
 
 // Factory 按台造 null 车端，并从状态目录发现活着的车。
-type Factory struct{}
+type Factory struct {
+	// SessionName 空时状态文件在目录根上；有名字则用子目录。
+	SessionName string
+}
 
 func (Factory) Kind() string { return Kind }
 
@@ -42,16 +45,17 @@ func (f Factory) New(_ context.Context, session contract.Session, robot contract
 		section = parsed
 	}
 	return Vehicle{
-		Robot: robot,
-		world: link.World,
-		note:  section.Note,
+		Robot:       robot,
+		world:       link.World,
+		note:        section.Note,
+		SessionName: f.SessionName,
 	}, nil
 }
 
 // Discover 读状态目录里的 robot<N>.json：文件在就是车在，与容器车端的
 // "容器在就是车在"同一语义。
 func (f Factory) Discover(_ context.Context) ([]orchestrator.VehiclePort, error) {
-	root, err := dataRoot()
+	root, err := f.stateDir()
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +77,8 @@ func (f Factory) Discover(_ context.Context) ([]orchestrator.VehiclePort, error)
 	ports := make([]orchestrator.VehiclePort, 0, len(indices))
 	for _, index := range indices {
 		ports = append(ports, Vehicle{
-			Robot: contract.Robot{Index: index, Name: contract.RobotName(index)},
+			Robot:       contract.Robot{Index: index, Name: contract.RobotName(index)},
+			SessionName: f.SessionName,
 		})
 	}
 	return ports, nil
@@ -103,17 +108,29 @@ type vehicleState struct {
 
 // Vehicle 是一台 null 车：Start 写状态文件，Status/Discover 读它，Stop 删它。
 type Vehicle struct {
-	Robot contract.Robot
-	world string
-	note  string
+	Robot       contract.Robot
+	world       string
+	note        string
+	SessionName string
 }
 
-func (v Vehicle) statePath() (string, error) {
+func (f Factory) stateDir() (string, error) {
 	root, err := dataRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, contract.RobotName(v.Robot.Index)+".json"), nil
+	if f.SessionName != "" {
+		return filepath.Join(root, f.SessionName), nil
+	}
+	return root, nil
+}
+
+func (v Vehicle) statePath() (string, error) {
+	dir, err := (Factory{SessionName: v.SessionName}).stateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, contract.RobotName(v.Robot.Index)+".json"), nil
 }
 
 func (v Vehicle) Start(_ context.Context) error {

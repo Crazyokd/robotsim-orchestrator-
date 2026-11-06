@@ -20,18 +20,19 @@ const startTimeout = 10 * time.Minute
 
 type Runner interface {
 	Start(ctx context.Context, cfg contract.StartConfig) (orchestrator.Status, error)
-	Stop(ctx context.Context) error
-	Status(ctx context.Context) (orchestrator.Status, error)
-	Pose(ctx context.Context, robot int) (orchestrator.EntityPose, error)
-	Reset(ctx context.Context, robot int, pose contract.Pose) (orchestrator.EntityPose, error)
-	Call(ctx context.Context, robot int, request []byte) ([]byte, error)
+	StopSession(ctx context.Context, session string) error
+	StatusSession(ctx context.Context, session string) (orchestrator.Status, error)
+	Sessions(ctx context.Context) ([]orchestrator.SessionSummary, error)
+	PoseSession(ctx context.Context, session string, robot int) (orchestrator.EntityPose, error)
+	ResetSession(ctx context.Context, session string, robot int, pose contract.Pose) (orchestrator.EntityPose, error)
+	CallSession(ctx context.Context, session string, robot int, request []byte) ([]byte, error)
 }
 
 // Run 跑 CLI。registerStartFlags 是各 Port 的 RegisterFlags（组合根传入）：
 // 它们把实现参数挂到 start 的 FlagSet 上——CLI 自己只认识世界与机器人。
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner, registerStartFlags ...func(*flag.FlagSet)) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: simenv start|status|stop|pose|reset|call")
+		return fmt.Errorf("usage: simenv start|status [name]|stop [name]|pose|reset|call")
 	}
 	switch args[0] {
 	case "start":
@@ -45,41 +46,57 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner
 		if err != nil {
 			return err
 		}
-		printStatus(stdout, status)
+		printSessionDetail(stdout, status.Name, status)
 		return nil
 	case "status":
-		status, err := runner.Status(context.Background())
+		session, err := parseOptionalName("status", args[1:])
 		if err != nil {
 			return err
 		}
-		printStatus(stdout, status)
+		if session == "" {
+			sessions, err := runner.Sessions(context.Background())
+			if err != nil {
+				return err
+			}
+			printSessions(stdout, sessions)
+			return nil
+		}
+		status, err := runner.StatusSession(context.Background(), session)
+		if err != nil {
+			return err
+		}
+		printSessionDetail(stdout, session, status)
 		return nil
 	case "stop":
-		return runner.Stop(context.Background())
-	case "pose":
-		robot, err := parseRobotOnly(args[1:])
+		session, err := parseOptionalName("stop", args[1:])
 		if err != nil {
 			return err
 		}
-		pose, err := runner.Pose(context.Background(), robot)
+		return runner.StopSession(context.Background(), session)
+	case "pose":
+		session, robot, err := parseRobotOnly(args[1:])
+		if err != nil {
+			return err
+		}
+		pose, err := runner.PoseSession(context.Background(), session, robot)
 		if err != nil {
 			return err
 		}
 		printEntityPose(stdout, pose)
 		return nil
 	case "reset":
-		robot, pose, err := parseReset(args[1:])
+		session, robot, pose, err := parseReset(args[1:])
 		if err != nil {
 			return err
 		}
-		got, err := runner.Reset(context.Background(), robot, pose)
+		got, err := runner.ResetSession(context.Background(), session, robot, pose)
 		if err != nil {
 			return err
 		}
 		printEntityPose(stdout, got)
 		return nil
 	case "call":
-		robot, err := parseCall(args[1:])
+		session, robot, err := parseCall(args[1:])
 		if err != nil {
 			return err
 		}
@@ -90,7 +107,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner
 		if len(bytes.TrimSpace(request)) == 0 {
 			return fmt.Errorf("request is empty")
 		}
-		response, err := runner.Call(context.Background(), robot, request)
+		response, err := runner.CallSession(context.Background(), session, robot, request)
 		if err != nil {
 			return err
 		}
@@ -112,6 +129,7 @@ func parseStart(args []string, registerFlags []func(*flag.FlagSet)) (contract.St
 	posesText := fs.String("poses", "", "")
 	worldKind := fs.String("world-kind", "", "")
 	vehicleKind := fs.String("vehicle-kind", "", "")
+	sessionName := fs.String("session", "", "")
 	for _, register := range registerFlags {
 		register(fs)
 	}
@@ -128,7 +146,24 @@ func parseStart(args []string, registerFlags []func(*flag.FlagSet)) (contract.St
 		Poses:       poses,
 		WorldKind:   *worldKind,
 		VehicleKind: *vehicleKind,
+		SessionName: *sessionName,
 	}, nil
+}
+
+func parseOptionalName(command string, args []string) (string, error) {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	switch fs.NArg() {
+	case 0:
+		return "", nil
+	case 1:
+		return fs.Arg(0), nil
+	default:
+		return "", fmt.Errorf("%s accepts at most one session name", command)
+	}
 }
 
 func parsePoses(text string) ([]contract.Pose, error) {
@@ -162,20 +197,27 @@ func parsePoses(text string) ([]contract.Pose, error) {
 	return poses, nil
 }
 
-func parseRobotOnly(args []string) (int, error) {
+func parseRobotOnly(args []string) (string, int, error) {
 	fs := flag.NewFlagSet("pose", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	robot := fs.Int("robot", 0, "")
 	if err := fs.Parse(args); err != nil {
-		return 0, err
+		return "", 0, err
+	}
+	if fs.NArg() > 1 {
+		return "", 0, fmt.Errorf("pose accepts at most one session name")
+	}
+	sessionName := ""
+	if fs.NArg() == 1 {
+		sessionName = fs.Arg(0)
 	}
 	if *robot < 1 {
-		return 0, fmt.Errorf("robot must be >= 1")
+		return "", 0, fmt.Errorf("robot must be >= 1")
 	}
-	return *robot, nil
+	return sessionName, *robot, nil
 }
 
-func parseReset(args []string) (int, contract.Pose, error) {
+func parseReset(args []string) (string, int, contract.Pose, error) {
 	fs := flag.NewFlagSet("reset", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	robot := fs.Int("robot", 0, "")
@@ -202,15 +244,34 @@ func parseReset(args []string) (int, contract.Pose, error) {
 		return err
 	})
 	if err := fs.Parse(args); err != nil {
-		return 0, contract.Pose{}, err
+		return "", 0, contract.Pose{}, err
+	}
+	if fs.NArg() > 1 {
+		return "", 0, contract.Pose{}, fmt.Errorf("reset accepts at most one session name")
+	}
+	sessionName := ""
+	if fs.NArg() == 1 {
+		sessionName = fs.Arg(0)
 	}
 	if *robot < 1 {
-		return 0, contract.Pose{}, fmt.Errorf("robot must be >= 1")
+		return "", 0, contract.Pose{}, fmt.Errorf("robot must be >= 1")
 	}
 	if !xSet || !ySet || !yawSet {
-		return 0, contract.Pose{}, fmt.Errorf("reset requires --x --y --yaw")
+		return "", 0, contract.Pose{}, fmt.Errorf("reset requires --x --y --yaw")
 	}
-	return *robot, contract.Pose{X: x, Y: y, Z: z, Yaw: yaw}, nil
+	return sessionName, *robot, contract.Pose{X: x, Y: y, Z: z, Yaw: yaw}, nil
+}
+
+func printSessions(w io.Writer, sessions []orchestrator.SessionSummary) {
+	for _, session := range sessions {
+		fmt.Fprintf(w, "session %s world=%s vehicle=%s connected=%t\n",
+			session.Name, session.WorldKind, session.VehicleKind, session.Connected)
+	}
+}
+
+func printSessionDetail(w io.Writer, name string, status orchestrator.Status) {
+	fmt.Fprintf(w, "session %s\n", name)
+	printStatus(w, status)
 }
 
 func printStatus(w io.Writer, status orchestrator.Status) {
@@ -245,18 +306,22 @@ func printEntityPose(w io.Writer, pose orchestrator.EntityPose) {
 		pose.Robot, pose.Entity, pose.Pose.X, pose.Pose.Y, pose.Pose.Z, pose.Pose.Yaw)
 }
 
-func parseCall(args []string) (int, error) {
+func parseCall(args []string) (string, int, error) {
 	fs := flag.NewFlagSet("call", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	robot := fs.Int("robot", 0, "")
 	if err := fs.Parse(args); err != nil {
-		return 0, err
+		return "", 0, err
 	}
 	if *robot < 1 {
-		return 0, fmt.Errorf("robot must be >= 1")
+		return "", 0, fmt.Errorf("robot must be >= 1")
 	}
-	if fs.NArg() != 0 {
-		return 0, fmt.Errorf("call only accepts --robot")
+	if fs.NArg() > 1 {
+		return "", 0, fmt.Errorf("call accepts at most one session name")
 	}
-	return *robot, nil
+	sessionName := ""
+	if fs.NArg() == 1 {
+		sessionName = fs.Arg(0)
+	}
+	return sessionName, *robot, nil
 }

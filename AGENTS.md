@@ -6,7 +6,7 @@
 
 - **本仓**：机器人仿真编排框架 + 当前内置的 Gazebo 世界 Port 与 EasyGo 车端 Port。框架不解释任何一种仿真器或车端；Gazebo server、world SDF、机器人模型、spawn、GZ `clock` 是 Gazebo Port 的实现细节。框架层不起 easygo-app / SLAM / Nav2 / WebApp / 驾驶台 / RViz。
 - **新增实现**：新增仿真实现或车端实现 = 新增一个 `internal/ports/**` 包 + `cmd/simenv` 组合根注册表加一行。框架（`internal/contract`、`internal/orchestrator`、`internal/assets`、`internal/cli`）一行不改。`internal/ports/{world,vehicle}/null` 是零容器的状态文件对：无 Docker 开发模式，也是这条规则的架构自检。
-- **种类路由**：实现种类（kind）由 bundle `worlds`/`vehicles` 唯一键推导；裸世界必须显式给 `--world-kind` / `--vehicle-kind`。运行中的会话种类记在 `$XDG_CACHE_HOME/simenv/session.json`，status/stop/pose/reset/call 按它路由，未选中的实现不被构造，不逐实现盲探。Port 的发现与停止不得依赖 start-time 参数（发现路径拿不到它们）。
+- **种类路由**：实现种类（kind）由 bundle `worlds`/`vehicles` 唯一键推导；裸世界必须显式给 `--world-kind` / `--vehicle-kind`。运行中的会话名单在 `$XDG_CACHE_HOME/simenv/session.json`：每条记名字、世界种类、车端种类、资源槽。`start` 不写 `--session` 就生成一个名字（如 `brisk-otter`），写了就用指定的。`simenv status` 列出全部，`simenv status <name>` 展开这一次；`simenv stop` 停最近启动的那一个，`simenv stop <name>` 停指定的。点名的 pose/reset/call 把会话名放在命令后面。未选中的实现不被构造，不逐实现盲探。Port 的发现与停止不得依赖 start-time 参数（发现路径拿不到它们）。
 - **程序**：现有 EasyGo `runtime-sim` + `sim_easygo.launch.py start_gazebo:=false`。由 `--app-image` 传入。程序不读本仓源码，不起 Gazebo server。
 - 两边不共享镜像、不共享 launch、不共享版本号。环境镜像不以 `runtime-sim` 为 `FROM`。运行时不挂 EasyGo 工作区。
 - **会话契约**：`Session` 只含 `World`、`Robots`；Robot 只含 `Index`、`Name`、`Pose`（世界系，m / rad）。`Partition`、`TopicPrefix` 是 Gazebo Port 的接线约定，经 `Attachment` 交给车端，不进契约。

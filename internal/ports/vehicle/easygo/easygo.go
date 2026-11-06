@@ -48,33 +48,57 @@ const (
 
 // vehicleRuntime 是一台车的全部派生端口与 ROS domain：全部由车序号算出。
 type vehicleRuntime struct {
-	frontendPort int
-	apiPort      int
-	voicePort    int
-	mqttPort     int
-	observePort  int
-	webGZWebPort int
-	webGZRFBPort int
-	rvizWebPort  int
-	rvizRFBPort  int
-	rosDomainID  int
-	runtimeRoot  string
+	frontendPort       int
+	apiPort            int
+	voicePort          int
+	mqttPort           int
+	observePort        int
+	webGZWebPort       int
+	webGZRFBPort       int
+	rvizWebPort        int
+	rvizRFBPort        int
+	rosDomainID        int
+	runtimeRoot        string
+	slamWebPort        int
+	mdnsPort           int
+	syncMembershipPort int
 }
 
-func runtimeFor(index int) vehicleRuntime {
-	return vehicleRuntime{
-		frontendPort: httpBaseFrontend + index*httpStride,
-		apiPort:      httpBaseAPI + index*httpStride,
-		voicePort:    httpBaseVoice + index*httpStride,
-		mqttPort:     mqttBase + index,
-		observePort:  observeBase + index*httpStride,
-		webGZWebPort: webGZWebBase + index*httpStride,
-		webGZRFBPort: webGZRFBBase + index*httpStride,
-		rvizWebPort:  rvizWebBase + index*httpStride,
-		rvizRFBPort:  rvizRFBBase + index*httpStride,
-		rosDomainID:  rosDomainBase + (index - 1),
-		runtimeRoot:  runtimeRoot,
+func runtimeFor(index, slot int) vehicleRuntime {
+	rt := vehicleRuntime{
+		frontendPort:       httpBaseFrontend + index*httpStride,
+		apiPort:            httpBaseAPI + index*httpStride,
+		voicePort:          httpBaseVoice + index*httpStride,
+		mqttPort:           mqttBase + index,
+		observePort:        observeBase + index*httpStride,
+		webGZWebPort:       webGZWebBase + index*httpStride,
+		webGZRFBPort:       webGZRFBBase + index*httpStride,
+		rvizWebPort:        rvizWebBase + index*httpStride,
+		rvizRFBPort:        rvizRFBBase + index*httpStride,
+		rosDomainID:        rosDomainBase + (index - 1),
+		runtimeRoot:        runtimeRoot,
+		slamWebPort:        slamWebPort(index),
+		mdnsPort:           mdnsPortBase + (index-1)*syncPortStride,
+		syncMembershipPort: syncMembershipPortBase + (index-1)*syncPortStride,
 	}
+	if slot > 0 {
+		// 命名会话挪出 default 的端口块。HTTP 一类加 10000*slot，ROS domain 加 20*slot。
+		shift := slot * 10000
+		rt.frontendPort += shift
+		rt.apiPort += shift
+		rt.voicePort += shift
+		rt.mqttPort += slot * 100
+		rt.observePort += shift
+		rt.webGZWebPort += shift
+		rt.webGZRFBPort += shift
+		rt.rvizWebPort += shift
+		rt.rvizRFBPort += shift
+		rt.rosDomainID += slot * 20
+		rt.slamWebPort += shift
+		rt.mdnsPort += shift
+		rt.syncMembershipPort += shift
+	}
+	return rt
 }
 
 func slamWebPort(index int) int {

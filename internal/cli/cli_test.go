@@ -34,21 +34,25 @@ func (f *fakeOrch) Start(_ context.Context, cfg contract.StartConfig) (orchestra
 	}, nil
 }
 
-func (f *fakeOrch) Stop(context.Context) error { return nil }
+func (f *fakeOrch) StopSession(context.Context, string) error { return nil }
 
-func (f *fakeOrch) Status(context.Context) (orchestrator.Status, error) {
+func (f *fakeOrch) StatusSession(context.Context, string) (orchestrator.Status, error) {
 	return f.status, nil
 }
 
-func (f *fakeOrch) Pose(_ context.Context, robot int) (orchestrator.EntityPose, error) {
+func (f *fakeOrch) Sessions(context.Context) ([]orchestrator.SessionSummary, error) {
+	return nil, nil
+}
+
+func (f *fakeOrch) PoseSession(_ context.Context, _ string, robot int) (orchestrator.EntityPose, error) {
 	return orchestrator.EntityPose{Robot: robot, Entity: contract.RobotName(robot), Pose: contract.Pose{X: 1.25, Y: -0.5, Z: 0.05}}, nil
 }
 
-func (f *fakeOrch) Reset(_ context.Context, robot int, pose contract.Pose) (orchestrator.EntityPose, error) {
+func (f *fakeOrch) ResetSession(_ context.Context, _ string, robot int, pose contract.Pose) (orchestrator.EntityPose, error) {
 	return orchestrator.EntityPose{Robot: robot, Entity: contract.RobotName(robot), Pose: pose}, nil
 }
 
-func (f *fakeOrch) Call(_ context.Context, robot int, request []byte) ([]byte, error) {
+func (f *fakeOrch) CallSession(_ context.Context, _ string, robot int, request []byte) ([]byte, error) {
 	if robot != 1 {
 		return nil, fmt.Errorf("unexpected robot %d", robot)
 	}

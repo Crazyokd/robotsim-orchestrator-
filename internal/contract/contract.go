@@ -44,6 +44,10 @@ type StartConfig struct {
 	// 裸世界（无 bundle）没有可决定的键，两个 kind 都必须显式给。
 	WorldKind   string
 	VehicleKind string
+	// SessionName 是这次启动的会话名。空则由编排生成一个；指定了就用指定的。
+	SessionName string
+	// Slot 是编排分配的资源槽，从 0 起取还没占用的最小整数。调用方不填。
+	Slot int
 }
 
 func RobotName(index int) string {
@@ -81,6 +85,11 @@ func (c StartConfig) Validate() error {
 	}
 	if c.VehicleKind != "" {
 		if err := validateSafeToken("vehicle kind", c.VehicleKind); err != nil {
+			return err
+		}
+	}
+	if c.SessionName != "" {
+		if err := validateSafeToken("session", c.SessionName); err != nil {
 			return err
 		}
 	}

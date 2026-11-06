@@ -95,6 +95,16 @@ func twoRobotSession(t *testing.T) contract.Session {
 	return session
 }
 
+func TestNamedSessionKeepsItsOwnContainerAndPartition(t *testing.T) {
+	named := DockerWorld{SessionName: "alpha"}
+	if named.containerName() != WorldContainer+"-alpha" || named.partition() != Partition+"-alpha" {
+		t.Fatalf("container=%s partition=%s", named.containerName(), named.partition())
+	}
+	if (DockerWorld{}).containerName() != WorldContainer || (DockerWorld{}).partition() != Partition {
+		t.Fatal("the unnamed session keeps the single-session container and partition")
+	}
+}
+
 func TestStartRunsTheWorldContainerAndHandsOutAttachments(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
 	world := DockerWorld{Engine: engine, Options: Options{
@@ -183,7 +193,7 @@ func TestReadyEnforcesItsOwnTimeout(t *testing.T) {
 	}
 	engine := &blockingReadyEngine{}
 
-	_, err := waitReadyWithTimeout(context.Background(), engine, nil, session, 10*time.Millisecond)
+	_, err := waitReadyWithTimeout(context.Background(), engine, nil, session, WorldContainer, 10*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error=%v, want deadline exceeded", err)
 	}

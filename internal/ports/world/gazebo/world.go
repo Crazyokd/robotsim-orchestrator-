@@ -22,10 +22,27 @@ type DockerWorld struct {
 	Engine  docker.Engine
 	Options Options
 	Sleep   func(context.Context, time.Duration) error
+	// SessionName 是这次会话的名字。空只留给未绑定会话的零值；绑定之后容器名和
+	// partition 都带上这个名字。
+	SessionName string
 }
 
 // Kind 满足框架的世界种类约定：bundle 的 worlds.gazebo 节与会话标记按它路由。
 func (DockerWorld) Kind() string { return Kind }
+
+func (w DockerWorld) containerName() string {
+	if w.SessionName == "" {
+		return WorldContainer
+	}
+	return WorldContainer + "-" + w.SessionName
+}
+
+func (w DockerWorld) partition() string {
+	if w.SessionName == "" {
+		return Partition
+	}
+	return Partition + "-" + w.SessionName
+}
 
 func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSection assets.Section) ([]orchestrator.Attachment, error) {
 	if err := session.Validate(); err != nil {
@@ -59,12 +76,12 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSec
 		worldCmd = append(worldCmd, "--cameras", strings.Join(cameraRobots, ","))
 	}
 	if err := w.Engine.Start(ctx, docker.ContainerSpec{
-		Name:    WorldContainer,
+		Name:    w.containerName(),
 		Image:   w.Options.EnvImage,
 		Command: worldCmd,
 		Env: map[string]string{
 			"GZ_IP":         GZIP,
-			"GZ_PARTITION":  Partition,
+			"GZ_PARTITION":  w.partition(),
 			"ROS_DOMAIN_ID": strconv.Itoa(EnvROSDomainID),
 		},
 		Network: "host",
@@ -76,7 +93,7 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSec
 	}
 	attachments := make([]orchestrator.Attachment, 0, len(session.Robots))
 	for _, robot := range session.Robots {
-		attachments = append(attachments, attachmentFor(robot, wantsCamera(w.Options.CameraRobots, robot.Index)))
+		attachments = append(attachments, attachmentFor(robot, wantsCamera(w.Options.CameraRobots, robot.Index), w.partition()))
 	}
 	return attachments, nil
 }
@@ -94,11 +111,11 @@ func (w DockerWorld) Ready(ctx context.Context, session contract.Session) (orche
 	if err := session.Validate(); err != nil {
 		return orchestrator.WorldReady{}, err
 	}
-	return waitReady(ctx, w.Engine, w.Sleep, session)
+	return waitReady(ctx, w.Engine, w.Sleep, session, w.containerName())
 }
 
 func (w DockerWorld) Status(ctx context.Context) (orchestrator.WorldStatus, error) {
-	info, err := w.Engine.Inspect(ctx, WorldContainer)
+	info, err := w.Engine.Inspect(ctx, w.containerName())
 	if errors.Is(err, docker.ErrNotFound) {
 		return orchestrator.WorldStatus{}, nil
 	}
@@ -113,7 +130,7 @@ func (w DockerWorld) Status(ctx context.Context) (orchestrator.WorldStatus, erro
 	if !info.Running {
 		return status, nil
 	}
-	ready, err := readReady(ctx, w.Engine)
+	ready, err := readReady(ctx, w.Engine, w.containerName())
 	if errors.Is(err, errWorldNotReady) {
 		return status, nil
 	}
@@ -128,14 +145,14 @@ func (w DockerWorld) Status(ctx context.Context) (orchestrator.WorldStatus, erro
 }
 
 func (w DockerWorld) Stop(ctx context.Context) error {
-	return w.Engine.Stop(ctx, WorldContainer)
+	return w.Engine.Stop(ctx, w.containerName())
 }
 
-func waitReady(ctx context.Context, engine docker.Engine, sleep func(context.Context, time.Duration) error, session contract.Session) (orchestrator.WorldReady, error) {
-	return waitReadyWithTimeout(ctx, engine, sleep, session, 3*time.Minute)
+func waitReady(ctx context.Context, engine docker.Engine, sleep func(context.Context, time.Duration) error, session contract.Session, container string) (orchestrator.WorldReady, error) {
+	return waitReadyWithTimeout(ctx, engine, sleep, session, container, 3*time.Minute)
 }
 
-func waitReadyWithTimeout(ctx context.Context, engine docker.Engine, sleep func(context.Context, time.Duration) error, session contract.Session, timeout time.Duration) (orchestrator.WorldReady, error) {
+func waitReadyWithTimeout(ctx context.Context, engine docker.Engine, sleep func(context.Context, time.Duration) error, session contract.Session, container string, timeout time.Duration) (orchestrator.WorldReady, error) {
 	readyCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if sleep == nil {
@@ -151,7 +168,7 @@ func waitReadyWithTimeout(ctx context.Context, engine docker.Engine, sleep func(
 		}
 	}
 	for {
-		report, err := readReady(readyCtx, engine)
+		report, err := readReady(readyCtx, engine, container)
 		if err == nil && readyReportMatches(report, session) {
 			return readyReport(report), nil
 		}
@@ -191,8 +208,8 @@ func readyReportMatches(report process.ReadyReport, session contract.Session) bo
 	return len(expected) == 0
 }
 
-func readReady(ctx context.Context, engine docker.Engine) (process.ReadyReport, error) {
-	out, err := engine.Exec(ctx, WorldContainer, []string{"cat", process.ReadyPath})
+func readReady(ctx context.Context, engine docker.Engine, container string) (process.ReadyReport, error) {
+	out, err := engine.Exec(ctx, container, []string{"cat", process.ReadyPath})
 	if err != nil {
 		return process.ReadyReport{}, err
 	}

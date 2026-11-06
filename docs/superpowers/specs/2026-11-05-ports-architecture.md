@@ -200,7 +200,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 ### 12.1 种类选择与会话标记
 
 - `Orchestrator` 持有种类注册表（`map[kind]constructor`），由组合根注入。种类选择规则：bundle 有对应节 → 唯一键即种类（单一来源）；bundle 该 map 为空 → 裸世界，必须显式给 kind flag；显式 flag 与 bundle 唯一键不一致 → 报错。**未被选中的实现不被构造**——status 一个 null 会话不得拉起 Docker client。
-- 会话标记：`$XDG_CACHE_HOME/simenv/session.json` 只记 `{world_kind, vehicle_kind}`，start 成功才写、stop 全停干净才摘、损坏即报错（含路径）。start 前按标记先停上次会话；status/stop/pose/reset/call 按标记构造选中实现。框架不逐实现盲探「谁活着」。
+- 会话名单：`$XDG_CACHE_HOME/simenv/session.json` 的 `sessions` 每条记 `{name, world_kind, vehicle_kind, slot, started_unix}`。`start` 不写 `--session` 就生成一个名字（如 `brisk-otter`），写了就用指定的。每个名字各占一个 slot，容器名、GZ partition、车端端口按它错开。start 只替换同名会话。`simenv status` 列出全部，`simenv status <name>` 展开该次；`simenv stop` 不写名字停最近启动的那一个，`simenv stop <name>` 停指定的。损坏的名单直接报错（含路径）。框架不逐实现盲探「谁活着」。
 
 ### 12.2 发现路径零参数
 

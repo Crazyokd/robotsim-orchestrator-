@@ -20,6 +20,7 @@ type VehicleStatus struct {
 }
 
 type Status struct {
+	Name      string
 	World     WorldStatus
 	Vehicles  []VehicleStatus
 	Connected bool
@@ -131,6 +132,25 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if err != nil {
 		return Status{}, err
 	}
+	if o.usingRegistry() {
+		records, err := loadSessions()
+		if err != nil {
+			return Status{}, err
+		}
+		if cfg.SessionName == "" {
+			cfg.SessionName, err = randomSessionName(records)
+			if err != nil {
+				return Status{}, err
+			}
+		}
+		// 同名会话会被这次启动替换，槽位按替换之后的名单分配，好让它沿用自己的槽。
+		cfg.Slot = assignSlot(exceptSession(records, cfg.SessionName))
+	} else if cfg.SessionName == "" {
+		cfg.SessionName, err = randomSessionName(nil)
+		if err != nil {
+			return Status{}, err
+		}
+	}
 	// 种类决定：bundle 节的唯一键是单一来源，显式 kind 只在裸世界时必需、
 	// 给了就必须与 bundle 一致。选完才构造对应 Port——未选中的实现连构造
 	// 都不发生（它的运行时不可用不该拖垮别的种类的会话）。
@@ -154,11 +174,16 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 			return Status{}, err
 		}
 	}
-	// 先停掉上一次会话：注册表路径按会话标记找到当时用的种类停干净；
-	// 注入路径（测试）停掉工厂发现的全部车。然后再开新会话。
+	// 同名会话先停掉再开，其它名字留着。注入路径（测试）停掉工厂发现的全部车。
 	if o.usingRegistry() {
-		if err := o.stopMarkedSession(ctx); err != nil {
+		records, err := loadSessions()
+		if err != nil {
 			return Status{}, err
+		}
+		if _, ok := findSession(records, cfg.SessionName); ok {
+			if err := o.stopSession(ctx, cfg.SessionName); err != nil {
+				return Status{}, err
+			}
 		}
 	} else {
 		existingVehicles, err := vehicleFactory.Discover(ctx)
@@ -213,20 +238,47 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		return Status{}, errors.Join(err, rollback())
 	}
 	if o.usingRegistry() {
-		if err := saveSessionMarker(sessionMarker{
+		if err := upsertSession(sessionRecord{
+			Name:        cfg.SessionName,
 			WorldKind:   worldPort.Kind(),
 			VehicleKind: vehicleFactory.Kind(),
+			Slot:        cfg.Slot,
+			StartedUnix: time.Now().UnixNano(),
 		}); err != nil {
 			return Status{}, errors.Join(err, rollback())
 		}
 	}
+	status.Name = cfg.SessionName
 	return status, nil
 }
 
 func (o Orchestrator) Stop(ctx context.Context) error {
-	if o.usingRegistry() {
-		return o.stopMarkedSession(ctx)
+	return o.StopSession(ctx, "")
+}
+
+// StopSession 停掉指名的会话。名字空着时停最近启动的那一个；没有会话则直接成功。
+func (o Orchestrator) StopSession(ctx context.Context, name string) error {
+	if !o.usingRegistry() {
+		return o.stopInjected(ctx)
 	}
+	records, err := loadSessions()
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		rec, ok := latestSession(records)
+		if !ok {
+			return nil
+		}
+		name = rec.Name
+	}
+	if _, ok := findSession(records, name); !ok {
+		return fmt.Errorf("no session %q", name)
+	}
+	return o.stopSession(ctx, name)
+}
+
+func (o Orchestrator) stopInjected(ctx context.Context) error {
 	worldPort, worldErr := o.worldPort(contract.StartConfig{})
 	vehicleFactory, factoryErr := o.vehicleFactory(contract.StartConfig{})
 	var vehiclePorts []VehiclePort
@@ -265,22 +317,81 @@ func (o Orchestrator) Status(ctx context.Context) (Status, error) {
 	return statusFromPorts(ctx, worldPort, vehiclePorts)
 }
 
-// markedStatus 是注册表路径的 status：按会话标记路由到当时用的种类。
-// 没有标记就是没有进行中的会话——不逐个实现盲探（某个实现的运行时不可用
-// 不该拖垮别的种类，也不该让一次 status 去碰不需要的运行时）。
-func (o Orchestrator) markedStatus(ctx context.Context) (Status, error) {
-	marker, err := loadSessionMarker()
+// SessionSummary 是 status 不点名时的一行：名字、种类、是否接通。
+type SessionSummary struct {
+	Name        string
+	WorldKind   string
+	VehicleKind string
+	Connected   bool
+}
+
+// Sessions 列出全部进行中的会话。注入路径没有名单，按当前这一次端口报告一行。
+func (o Orchestrator) Sessions(ctx context.Context) ([]SessionSummary, error) {
+	if !o.usingRegistry() {
+		status, err := o.Status(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !status.World.Present && len(status.Vehicles) == 0 {
+			return nil, nil
+		}
+		return []SessionSummary{{
+			Name:      status.Name,
+			Connected: status.Connected,
+		}}, nil
+	}
+	records, err := loadSessions()
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]SessionSummary, 0, len(records))
+	for _, rec := range records {
+		status, err := o.statusRecord(ctx, rec)
+		if err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, SessionSummary{
+			Name:        rec.Name,
+			WorldKind:   rec.WorldKind,
+			VehicleKind: rec.VehicleKind,
+			Connected:   status.Connected,
+		})
+	}
+	return summaries, nil
+}
+
+// StatusSession 报告指名会话的详情。名字空着时用最近启动的那一个；
+// 没有会话则是空状态，不构造任何实现。
+func (o Orchestrator) StatusSession(ctx context.Context, name string) (Status, error) {
+	if !o.usingRegistry() {
+		return o.Status(ctx)
+	}
+	records, err := loadSessions()
 	if err != nil {
 		return Status{}, err
 	}
-	if marker == nil {
+	rec, ok, err := pickSession(records, name)
+	if err != nil {
+		return Status{}, err
+	}
+	if !ok {
 		return Status{}, nil
 	}
-	worldPort, err := o.newWorld(marker.WorldKind, contract.StartConfig{})
+	status, err := o.statusRecord(ctx, rec)
 	if err != nil {
 		return Status{}, err
 	}
-	vehicleFactory, err := o.newVehicleFactory(marker.VehicleKind, contract.StartConfig{})
+	status.Name = rec.Name
+	return status, nil
+}
+
+func (o Orchestrator) statusRecord(ctx context.Context, rec sessionRecord) (Status, error) {
+	cfg := portConfig(rec)
+	worldPort, err := o.newWorld(rec.WorldKind, cfg)
+	if err != nil {
+		return Status{}, err
+	}
+	vehicleFactory, err := o.newVehicleFactory(rec.VehicleKind, cfg)
 	if err != nil {
 		return Status{}, err
 	}
@@ -291,26 +402,31 @@ func (o Orchestrator) markedStatus(ctx context.Context) (Status, error) {
 	return statusFromPorts(ctx, worldPort, vehiclePorts)
 }
 
-// stopMarkedSession 停掉会话标记记录的那次会话：车端按标记的种类发现后停，
-// 世界按标记的种类停。全部停干净才摘标记；停不干净标记留着，好让下一次
-// stop / start 重试。没有标记就是没有会话，直接成功。
-func (o Orchestrator) stopMarkedSession(ctx context.Context) error {
-	marker, err := loadSessionMarker()
+// markedStatus 是注册表路径的 status：最近一次会话。没有名单就是没有进行中的会话。
+func (o Orchestrator) markedStatus(ctx context.Context) (Status, error) {
+	return o.StatusSession(ctx, "")
+}
+
+// stopSession 停掉指名会话。全部停干净才从名单摘掉；停不干净记录留着，好让下一次重试。
+func (o Orchestrator) stopSession(ctx context.Context, name string) error {
+	records, err := loadSessions()
 	if err != nil {
 		return err
 	}
-	if marker == nil {
-		return nil
+	rec, ok := findSession(records, name)
+	if !ok {
+		return fmt.Errorf("no session %q", name)
 	}
+	cfg := portConfig(rec)
 	var stopErr error
-	if vehicleFactory, ferr := o.newVehicleFactory(marker.VehicleKind, contract.StartConfig{}); ferr != nil {
+	if vehicleFactory, ferr := o.newVehicleFactory(rec.VehicleKind, cfg); ferr != nil {
 		stopErr = errors.Join(stopErr, ferr)
 	} else if vehiclePorts, derr := vehicleFactory.Discover(ctx); derr != nil {
 		stopErr = errors.Join(stopErr, derr)
 	} else {
 		stopErr = errors.Join(stopErr, stopVehiclePorts(ctx, vehiclePorts))
 	}
-	if worldPort, werr := o.newWorld(marker.WorldKind, contract.StartConfig{}); werr != nil {
+	if worldPort, werr := o.newWorld(rec.WorldKind, cfg); werr != nil {
 		stopErr = errors.Join(stopErr, werr)
 	} else {
 		stopErr = errors.Join(stopErr, worldPort.Stop(ctx))
@@ -318,7 +434,25 @@ func (o Orchestrator) stopMarkedSession(ctx context.Context) error {
 	if stopErr != nil {
 		return stopErr
 	}
-	return clearSessionMarker()
+	return deleteSession(name)
+}
+
+func portConfig(rec sessionRecord) contract.StartConfig {
+	return contract.StartConfig{SessionName: rec.Name, Slot: rec.Slot}
+}
+
+// pickSession 按名字取一条。名字空着时取最近启动的；名单空则 ok=false，不算错误。
+// 点了名却没有这条，是错误。
+func pickSession(records []sessionRecord, name string) (sessionRecord, bool, error) {
+	if name == "" {
+		rec, ok := latestSession(records)
+		return rec, ok, nil
+	}
+	rec, ok := findSession(records, name)
+	if !ok {
+		return sessionRecord{}, false, fmt.Errorf("no session %q", name)
+	}
+	return rec, true, nil
 }
 
 func statusFromPorts(ctx context.Context, worldPort WorldPort, vehiclePorts []VehiclePort) (Status, error) {

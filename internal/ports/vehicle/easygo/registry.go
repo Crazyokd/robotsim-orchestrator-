@@ -88,7 +88,7 @@ func (v Vehicle) initialRegistryDefaults() []registryOverride {
 		{
 			Registry: syncRegistry,
 			Key:      syncMembershipPortKey,
-			Value:    strconv.Itoa(syncMembershipPortBase + (v.Robot.Index-1)*syncPortStride),
+			Value:    strconv.Itoa(v.runtime().syncMembershipPort),
 		},
 	}
 }

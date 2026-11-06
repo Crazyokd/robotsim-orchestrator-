@@ -29,7 +29,7 @@ stop:   ∀ a port(a).Stop → World.Stop
 
 启动按一次会话处理：开始前先停止发现到的旧程序端口，避免减少机器人数量时遗留旧容器。世界已启动后，`Ready`、任一 `VehiclePort.Start` 或最终状态读取失败，编排器按启动逆序停止已创建的程序端口，再停止世界；原始失败和清理失败一起返回。
 
-当前实现是单活动会话。程序容器必须带有 `simenv.managed=true`、`simenv.role=app`、`simenv.robot` 和 `simenv.robot.index` 标签；发现只接受这些标签，不从容器名推断机器人。多会话并存时，再增加会话身份或清单文件，不能靠名称扫描解决。
+会话用名字区分，名单在 `session.json`。`start` 不写 `--session` 就生成一个名字，写了就用指定的。程序容器必须带有 `simenv.managed=true`、`simenv.role=app`、`simenv.robot`、`simenv.robot.index` 和 `simenv.session` 标签；发现只接受这些标签，不从容器名推断机器人。`simenv status` 列出全部，`simenv status <name>` 展开这一次。`stop` 不写名字停最近启动的那一次。
 
 就绪含义由框架定：环境在推进，每个 Attachment 的身体已在。怎么判定，端口实现回答。编排核只问端口。
 

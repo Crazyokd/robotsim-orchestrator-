@@ -47,6 +47,6 @@ func (a Attachment) HasCameras() bool { return a.Cameras }
 
 // attachmentFor 派生一台车的挂接信息。TopicPrefix 与实体名同形（robotN）：
 // GZ topic 前缀即实体名，这是本 Port 的接线约定。
-func attachmentFor(robot contract.Robot, cameras bool) Attachment {
-	return Attachment{Cameras: cameras, IP: GZIP, Partition: Partition, TopicPrefix: robot.Name}
+func attachmentFor(robot contract.Robot, cameras bool, partition string) Attachment {
+	return Attachment{Cameras: cameras, IP: GZIP, Partition: partition, TopicPrefix: robot.Name}
 }

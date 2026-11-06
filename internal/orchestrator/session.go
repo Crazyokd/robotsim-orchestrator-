@@ -5,20 +5,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"time"
 )
 
-// sessionMarker 是框架唯一持久化的控制面状态：本次会话用的是哪个世界实现、
-// 哪个车端实现。容器或状态文件仍是"会话在不在"的真相，标记只回答"哪种实现
-// 去发现它"——status / stop / pose / reset / call 按标记路由，不逐个实现盲探
-// （盲探会让某个实现的运行时不可用时拖垮整个 status）。
-type sessionMarker struct {
+// sessionRecord 是一次进行中的会话。容器或状态文件仍是"会话在不在"的真相，
+// 记录只回答"哪个名字、哪种实现、哪一档资源"。status / stop / pose / reset / call
+// 按它路由，不逐个实现盲探。
+type sessionRecord struct {
+	Name        string `json:"name"`
 	WorldKind   string `json:"world_kind"`
 	VehicleKind string `json:"vehicle_kind"`
+	Slot        int    `json:"slot"`
+	StartedUnix int64  `json:"started_unix"`
 }
 
-// sessionMarkerPath 是标记文件的位置：用户缓存目录下，运行时数据不进资产目录。
+type sessionFile struct {
+	Sessions []sessionRecord `json:"sessions"`
+}
+
+// sessionMarkerPath 是会话名单的位置：用户缓存目录下，运行时数据不进资产目录。
 // 测试用 XDG_CACHE_HOME 指向临时目录隔离。
 func sessionMarkerPath() (string, error) {
 	cacheDir, err := os.UserCacheDir()
@@ -28,9 +36,7 @@ func sessionMarkerPath() (string, error) {
 	return filepath.Join(cacheDir, "simenv", "session.json"), nil
 }
 
-// loadSessionMarker 读标记；没有标记返回 (nil, nil)——没有进行中的会话。
-// 文件损坏是错误：不猜，让操作员处理（路径写进错误信息）。
-func loadSessionMarker() (*sessionMarker, error) {
+func loadSessions() ([]sessionRecord, error) {
 	path, err := sessionMarkerPath()
 	if err != nil {
 		return nil, err
@@ -44,20 +50,30 @@ func loadSessionMarker() (*sessionMarker, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var marker sessionMarker
-	if err := dec.Decode(&marker); err != nil {
+	var file sessionFile
+	if err := dec.Decode(&file); err != nil {
 		return nil, fmt.Errorf("parse session marker %s: %w", path, err)
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("parse session marker %s: trailing content", path)
 	}
-	if marker.WorldKind == "" || marker.VehicleKind == "" {
-		return nil, fmt.Errorf("session marker %s: kinds must not be empty", path)
+	seen := make(map[string]struct{}, len(file.Sessions))
+	for _, rec := range file.Sessions {
+		if rec.Name == "" || rec.WorldKind == "" || rec.VehicleKind == "" {
+			return nil, fmt.Errorf("session marker %s: name and kinds must not be empty", path)
+		}
+		if _, ok := seen[rec.Name]; ok {
+			return nil, fmt.Errorf("session marker %s: duplicate session %q", path, rec.Name)
+		}
+		seen[rec.Name] = struct{}{}
+		if rec.Slot < 0 {
+			return nil, fmt.Errorf("session marker %s: session %q slot must be >= 0", path, rec.Name)
+		}
 	}
-	return &marker, nil
+	return file.Sessions, nil
 }
 
-func saveSessionMarker(marker sessionMarker) error {
+func saveSessions(records []sessionRecord) error {
 	path, err := sessionMarkerPath()
 	if err != nil {
 		return err
@@ -65,21 +81,147 @@ func saveSessionMarker(marker sessionMarker) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create session marker dir: %w", err)
 	}
-	raw, err := json.Marshal(marker)
+	raw, err := json.Marshal(sessionFile{Sessions: records})
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o644)
-}
-
-// clearSessionMarker 摘掉标记；本就没有标记不是错误。
-func clearSessionMarker() error {
-	path, err := sessionMarkerPath()
-	if err != nil {
-		return err
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return fmt.Errorf("write session marker %s: %w", path, err)
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove session marker %s: %w", path, err)
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("write session marker %s: %w", path, err)
 	}
 	return nil
+}
+
+func upsertSession(rec sessionRecord) error {
+	records, err := loadSessions()
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for i := range records {
+		if records[i].Name == rec.Name {
+			records[i] = rec
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		records = append(records, rec)
+	}
+	return saveSessions(records)
+}
+
+func deleteSession(name string) error {
+	records, err := loadSessions()
+	if err != nil {
+		return err
+	}
+	kept := records[:0]
+	for _, rec := range records {
+		if rec.Name != name {
+			kept = append(kept, rec)
+		}
+	}
+	return saveSessions(kept)
+}
+
+func findSession(records []sessionRecord, name string) (sessionRecord, bool) {
+	for _, rec := range records {
+		if rec.Name == name {
+			return rec, true
+		}
+	}
+	return sessionRecord{}, false
+}
+
+// latestSession 是最近启动的那一次。同时启动时取名单里靠后的一条。
+func latestSession(records []sessionRecord) (sessionRecord, bool) {
+	if len(records) == 0 {
+		return sessionRecord{}, false
+	}
+	best := records[0]
+	for _, rec := range records[1:] {
+		if rec.StartedUnix >= best.StartedUnix {
+			best = rec
+		}
+	}
+	return best, true
+}
+
+// assignSlot 取还没占用的最小非负槽。records 里不应再包含即将替换的同名会话。
+func assignSlot(records []sessionRecord) int {
+	used := make(map[int]struct{}, len(records))
+	for _, rec := range records {
+		used[rec.Slot] = struct{}{}
+	}
+	for slot := 0; ; slot++ {
+		if _, ok := used[slot]; !ok {
+			return slot
+		}
+	}
+}
+
+var sessionAdjectives = []string{
+	"amber", "brisk", "bold", "bright", "calm", "cosy", "crisp", "dizzy",
+	"gentle", "golden", "happy", "hazy", "jolly", "lucky", "mellow", "nimble",
+	"plucky", "quiet", "rapid", "sunny", "swift", "tidy", "vivid", "witty",
+}
+
+var sessionNouns = []string{
+	"badger", "comet", "falcon", "finch", "harbor", "heron", "kettle", "lark",
+	"maple", "otter", "pebble", "pioneer", "quartz", "robin", "sail", "sparrow",
+	"thicket", "trail", "willow", "zephyr",
+}
+
+// randomSessionName 抽一个还没占用的名字，形如 brisk-otter。
+func randomSessionName(records []sessionRecord) (string, error) {
+	used := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		used[rec.Name] = struct{}{}
+	}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for try := 0; try < 64; try++ {
+		name := sessionAdjectives[rng.Intn(len(sessionAdjectives))] + "-" + sessionNouns[rng.Intn(len(sessionNouns))]
+		if _, ok := used[name]; !ok {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("could not pick a free session name")
+}
+
+func exceptSession(records []sessionRecord, name string) []sessionRecord {
+	kept := make([]sessionRecord, 0, len(records))
+	for _, rec := range records {
+		if rec.Name != name {
+			kept = append(kept, rec)
+		}
+	}
+	return kept
+}
+
+// saveSessionMarker 写入或替换一条会话。测试里名字空着时记成 marker。
+func saveSessionMarker(rec sessionRecord) error {
+	if rec.Name == "" {
+		rec.Name = "marker"
+	}
+	if rec.StartedUnix == 0 {
+		rec.StartedUnix = time.Now().UnixNano()
+	}
+	return upsertSession(rec)
+}
+
+// loadSessionMarker 读最近启动的会话；没有则返回 (nil, nil)。
+func loadSessionMarker() (*sessionRecord, error) {
+	records, err := loadSessions()
+	if err != nil {
+		return nil, err
+	}
+	rec, ok := latestSession(records)
+	if !ok {
+		return nil, nil
+	}
+	return &rec, nil
 }

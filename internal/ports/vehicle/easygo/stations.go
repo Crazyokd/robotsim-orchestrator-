@@ -165,7 +165,7 @@ func (v Vehicle) appJSON(ctx context.Context, method, path string, payload []byt
 	if v.DoJSON != nil {
 		return v.DoJSON(ctx, method, path, payload)
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d%s", runtimeFor(v.Robot.Index).apiPort, path)
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", v.runtime().apiPort, path)
 	var reader io.Reader
 	if payload != nil {
 		reader = bytes.NewReader(payload)

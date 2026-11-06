@@ -125,6 +125,19 @@ func testLink(robot contract.Robot) gazebo.Attachment {
 	return gazebo.Attachment{IP: gazebo.GZIP, Partition: gazebo.Partition, TopicPrefix: robot.Name}
 }
 
+func TestNamedSessionShiftsContainerAndPorts(t *testing.T) {
+	vehicle := Vehicle{Robot: contract.Robot{Index: 1, Name: "robot1"}, SessionName: "alpha", Slot: 1}
+	if vehicle.containerName() != "simenv-alpha-robot1" {
+		t.Fatalf("container=%s", vehicle.containerName())
+	}
+	if vehicle.runtime().apiPort == runtimeFor(1, 0).apiPort || vehicle.runtime().rosDomainID == runtimeFor(1, 0).rosDomainID {
+		t.Fatalf("slot 1 reused the default ports: %+v", vehicle.runtime())
+	}
+	if (Vehicle{Robot: contract.Robot{Index: 1, Name: "robot1"}}).containerName() != "simenv-robot1" {
+		t.Fatal("the default session keeps simenv-robotN")
+	}
+}
+
 func TestFactoryNewReadsTheGazeboAttachment(t *testing.T) {
 	factory := Factory{Engine: &fakeEngine{infos: map[string]docker.ContainerInfo{}}}
 	port, err := factory.New(context.Background(), oneRobotSession(t), contract.Robot{Index: 1, Name: "robot1"}, testLink(contract.Robot{Index: 1, Name: "robot1"}), nil)
@@ -195,7 +208,7 @@ func TestVehicleStartConfiguresTheContainer(t *testing.T) {
 }
 
 func TestLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
-	args := launchArgs(contract.Robot{Index: 1, Name: "robot1"}, "fleet/robot1", runtimeFor(1), false, false, false)
+	args := launchArgs(contract.Robot{Index: 1, Name: "robot1"}, "fleet/robot1", runtimeFor(1, 0), false, false, false)
 	if !containsAny(args, "robot_name:=fleet/robot1") {
 		t.Fatalf("args=%v", args)
 	}
@@ -206,23 +219,23 @@ func TestLaunchUsesTopicPrefixForBridgeName(t *testing.T) {
 
 func TestLaunchTogglesViewersIndependently(t *testing.T) {
 	robot := contract.Robot{Index: 1, Name: "robot1"}
-	headless := launchArgs(robot, "robot1", runtimeFor(1), false, false, false)
+	headless := launchArgs(robot, "robot1", runtimeFor(1, 0), false, false, false)
 	if !containsAny(headless, "use_gz_gui:=false") || !containsAny(headless, "use_rviz:=false") {
 		t.Fatalf("headless args=%v", headless)
 	}
-	rvizOnly := launchArgs(robot, "robot1", runtimeFor(1), true, false, false)
+	rvizOnly := launchArgs(robot, "robot1", runtimeFor(1, 0), true, false, false)
 	if !containsAny(rvizOnly, "use_rviz:=true") || !containsAny(rvizOnly, "use_gz_gui:=false") {
 		t.Fatalf("rviz-only args=%v", rvizOnly)
 	}
-	gzGuiOnly := launchArgs(robot, "robot1", runtimeFor(1), false, true, false)
+	gzGuiOnly := launchArgs(robot, "robot1", runtimeFor(1, 0), false, true, false)
 	if !containsAny(gzGuiOnly, "use_gz_gui:=true") || !containsAny(gzGuiOnly, "use_rviz:=false") {
 		t.Fatalf("gz-gui-only args=%v", gzGuiOnly)
 	}
-	both := launchArgs(robot, "robot1", runtimeFor(1), true, true, false)
+	both := launchArgs(robot, "robot1", runtimeFor(1, 0), true, true, false)
 	if !containsAny(both, "use_gz_gui:=true") || !containsAny(both, "use_rviz:=true") {
 		t.Fatalf("both args=%v", both)
 	}
-	cameras := launchArgs(robot, "robot1", runtimeFor(1), false, false, true)
+	cameras := launchArgs(robot, "robot1", runtimeFor(1, 0), false, false, true)
 	if !containsAny(cameras, "bridge_rgbd:=true") {
 		t.Fatalf("camera args=%v", cameras)
 	}
@@ -600,14 +613,14 @@ func TestDiscoveredVehicleUsesActualContainerName(t *testing.T) {
 }
 
 func TestRuntimePortArithmetic(t *testing.T) {
-	runtime := runtimeFor(1)
+	runtime := runtimeFor(1, 0)
 	if runtime.apiPort != 18189 || runtime.frontendPort != 18188 || runtime.voicePort != 18191 {
 		t.Fatalf("robot1 runtime=%+v", runtime)
 	}
 	if runtime.rosDomainID != 11 {
 		t.Fatalf("robot1 domain=%d", runtime.rosDomainID)
 	}
-	runtime = runtimeFor(2)
+	runtime = runtimeFor(2, 0)
 	if runtime.apiPort != 18289 || runtime.rosDomainID != 12 {
 		t.Fatalf("robot2 runtime=%+v", runtime)
 	}
