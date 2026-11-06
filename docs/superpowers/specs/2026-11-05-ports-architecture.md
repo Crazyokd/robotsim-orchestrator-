@@ -134,7 +134,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 世界 Port 启动后产出每车的 `Attachment`；车端 `Factory.New` 认自己要的挂接形状：
 
 - 认得 → 继续；不认得或缺它那种资产节 → **报错**。
-- 配对按形状，不按具体 Go 类型。null 车只认 `nullworld.Attachment`。EasyGo 认能给出 GZ transport 端点的挂接（`GZEndpoint` + `HasCameras`）；null 世界给不出这个形状，`Factory.New` 直接失败。
+- 配对按形状，不按具体 Go 类型。null 车只认 `nullworld.Attachment`。EasyGo 认能给出连接端点的挂接（`Endpoint` + `HasCameras`）；null 世界给不出这个形状，`Factory.New` 直接失败。
 - `ports/vehicle/easygo` 不 import `ports/world/gazebo`。Gazebo 的 `Attachment` 实现这组方法；另一套世界只要同样实现，就能接上这辆车，不用改 EasyGo。
 - Gazebo Port 的容器进程、`--cameras`、partition 常量、`robotN` 话题前缀全部留在 `ports/world/gazebo`；`GZ_IP` / `GZ_PARTITION` 是它的约定，不是仓库级约定。
 

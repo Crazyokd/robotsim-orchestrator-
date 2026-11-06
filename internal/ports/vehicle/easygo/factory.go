@@ -15,10 +15,10 @@ import (
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
 )
 
-// gzLink 是本车端能接上的世界挂接。世界不必来自某个具体包，只要给出
-// GZ transport 三要素，以及是否为这台车 spawn 了相机。
-type gzLink interface {
-	GZEndpoint() (ip, partition, topicPrefix string)
+// endpoint 是本车端能接上的世界挂接。世界不必来自某个具体包，只要给出
+// 连接三要素，以及是否为这台车 spawn 了相机。
+type endpoint interface {
+	Endpoint() (ip, partition, topicPrefix string)
 	HasCameras() bool
 }
 
@@ -34,13 +34,13 @@ func linkFrom(attachment orchestrator.Attachment) (WorldLink, error) {
 	if attachment == nil {
 		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q", "<nil>")
 	}
-	shaped, ok := attachment.(gzLink)
+	shaped, ok := attachment.(endpoint)
 	if !ok {
 		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q", attachment.Kind())
 	}
-	ip, partition, prefix := shaped.GZEndpoint()
+	ip, partition, prefix := shaped.Endpoint()
 	if ip == "" || partition == "" || prefix == "" {
-		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q: gz endpoint is incomplete", attachment.Kind())
+		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q: endpoint is incomplete", attachment.Kind())
 	}
 	return WorldLink{
 		Cameras:     shaped.HasCameras(),

@@ -24,8 +24,8 @@ const (
 	WorldContainer = "simenv-world"
 )
 
-// Attachment 是 Gazebo 世界给每台车的挂接信息：车端按 GZEndpoint 与
-// HasCameras 接上本世界的 GZ transport。认的是这组方法，不是本类型。
+// Attachment 是 Gazebo 世界给每台车的挂接信息。车端认的是 Endpoint 与
+// HasCameras，不是本类型；这三个值在本包里才是 GZ transport。
 type Attachment struct {
 	// Cameras 表示本世界为这台车 spawn 了相机传感器：车端要不要桥接
 	// 相机话题由它决定——相机选择单一来源是世界的 --cameras。
@@ -37,8 +37,8 @@ type Attachment struct {
 
 func (Attachment) Kind() string { return Kind }
 
-// GZEndpoint 把三要素摊平。车端按这个方法配对，不必 import 本包。
-func (a Attachment) GZEndpoint() (ip, partition, topicPrefix string) {
+// Endpoint 把连接三要素摊平给车端。方法名不带本世界的实现名。
+func (a Attachment) Endpoint() (ip, partition, topicPrefix string) {
 	return a.IP, a.Partition, a.TopicPrefix
 }
 
