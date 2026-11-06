@@ -131,11 +131,11 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 
 ## 7. 配对：Attachment 是显式的
 
-世界 Port 启动后产出每车的 `Attachment`；车端 `Factory.New` 收到后 type-switch：
+世界 Port 启动后产出每车的 `Attachment`；车端 `Factory.New` 认自己要的挂接形状：
 
 - 认得 → 继续；不认得或缺它那种资产节 → **报错**。
-- 配对约定双向落实：车端断言世界产出的具体 Attachment 类型，`Kind()` 不一致在 `Factory.New` 即失败；每种车端对每种已知世界各有一条配对测试（包括「easygo 拒绝 null 世界」这样的反向用例）。
-- `ports/vehicle/easygo` import `ports/world/gazebo` 拿 `gazebo.Attachment{Partition, TopicPrefix, IP}`——EasyGo-on-Gazebo 是一个配对，import 是有意为之。
+- 配对按形状，不按具体 Go 类型。null 车只认 `nullworld.Attachment`。EasyGo 认能给出 GZ transport 端点的挂接（`GZEndpoint` + `HasCameras`）；null 世界给不出这个形状，`Factory.New` 直接失败。
+- `ports/vehicle/easygo` 不 import `ports/world/gazebo`。Gazebo 的 `Attachment` 实现这组方法；另一套世界只要同样实现，就能接上这辆车，不用改 EasyGo。
 - Gazebo Port 的容器进程、`--cameras`、partition 常量、`robotN` 话题前缀全部留在 `ports/world/gazebo`；`GZ_IP` / `GZ_PARTITION` 是它的约定，不是仓库级约定。
 
 ## 8. 配置与 flag

@@ -18,7 +18,6 @@ import (
 	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/orchestrator"
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
-	"git.standard-robots.com/yicao/sim/internal/ports/world/gazebo"
 )
 
 // httpClient 给所有车端 HTTP 调用用：带超时——车端挂住时 Start 必须失败，
@@ -37,8 +36,8 @@ type Vehicle struct {
 	AssetsDir string
 	DoJSON    func(ctx context.Context, method, path string, payload []byte) ([]byte, int, error)
 	Dial      func(ctx context.Context, network, address string) (net.Conn, error)
-	// Link 是世界的挂接信息（GZ transport 三要素 + 相机配对），来自世界 Port 的 Attachment。
-	Link gazebo.Attachment
+	// Link 是从世界挂接抄下的 GZ transport 三要素和相机标志。
+	Link WorldLink
 	// Section 是 bundle vehicles.easygo 节（裸世界为零值，不灌图不定位）。
 	Section       Section
 	MapExportPath string

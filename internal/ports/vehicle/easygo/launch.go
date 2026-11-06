@@ -9,7 +9,6 @@ import (
 	"git.standard-robots.com/yicao/sim/internal/assets"
 	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
-	"git.standard-robots.com/yicao/sim/internal/ports/world/gazebo"
 )
 
 func launchArgs(robot contract.Robot, topicPrefix string, runtime vehicleRuntime, useRviz, useGzGui, useCameras bool) []string {
@@ -43,7 +42,7 @@ func launchArgs(robot contract.Robot, topicPrefix string, runtime vehicleRuntime
 	}
 }
 
-func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRuntime, link gazebo.Attachment) map[string]string {
+func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRuntime, link WorldLink) map[string]string {
 	return map[string]string{
 		"ROS_DOMAIN_ID":                 strconv.Itoa(runtime.rosDomainID),
 		"ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",

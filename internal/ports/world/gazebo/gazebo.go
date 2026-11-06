@@ -24,8 +24,8 @@ const (
 	WorldContainer = "simenv-world"
 )
 
-// Attachment 是 Gazebo 世界给每台车的挂接信息：车端按它接上本世界的
-// GZ transport。不认识 Gazebo 的车端在 Factory.New 就失败。
+// Attachment 是 Gazebo 世界给每台车的挂接信息：车端按 GZEndpoint 与
+// HasCameras 接上本世界的 GZ transport。认的是这组方法，不是本类型。
 type Attachment struct {
 	// Cameras 表示本世界为这台车 spawn 了相机传感器：车端要不要桥接
 	// 相机话题由它决定——相机选择单一来源是世界的 --cameras。
@@ -37,10 +37,13 @@ type Attachment struct {
 
 func (Attachment) Kind() string { return Kind }
 
-// GZEndpoint 把三要素摊平给不想 import 本包的调用方（结构化匹配）。
+// GZEndpoint 把三要素摊平。车端按这个方法配对，不必 import 本包。
 func (a Attachment) GZEndpoint() (ip, partition, topicPrefix string) {
 	return a.IP, a.Partition, a.TopicPrefix
 }
+
+// HasCameras 报告本世界是否为这台车 spawn 了相机。
+func (a Attachment) HasCameras() bool { return a.Cameras }
 
 // attachmentFor 派生一台车的挂接信息。TopicPrefix 与实体名同形（robotN）：
 // GZ topic 前缀即实体名，这是本 Port 的接线约定。

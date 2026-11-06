@@ -6,8 +6,8 @@
 // （世界系 ↔ 地图系 mm）、"世界 = 地图 + origin_offset" 的换算。它们不进
 // contract，也不进编排框架。
 //
-// 配对是有意为之：本包 import ports/world/gazebo 拿 gazebo.Attachment——
-// EasyGo-on-Gazebo 是一种配对；认不出挂接信息时在 Factory.New 直接失败。
+// 配对认挂接形状，不认某个世界包的类型：Factory.New 要 GZ transport
+// 端点（GZEndpoint）和相机标志（HasCameras）。给不出的世界直接失败。
 package easygo
 
 import "time"

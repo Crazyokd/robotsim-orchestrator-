@@ -13,8 +13,42 @@ import (
 	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/orchestrator"
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
-	"git.standard-robots.com/yicao/sim/internal/ports/world/gazebo"
 )
+
+// gzLink 是本车端能接上的世界挂接。世界不必来自某个具体包，只要给出
+// GZ transport 三要素，以及是否为这台车 spawn 了相机。
+type gzLink interface {
+	GZEndpoint() (ip, partition, topicPrefix string)
+	HasCameras() bool
+}
+
+// WorldLink 是启动一台车要用的挂接副本。
+type WorldLink struct {
+	Cameras     bool
+	IP          string
+	Partition   string
+	TopicPrefix string
+}
+
+func linkFrom(attachment orchestrator.Attachment) (WorldLink, error) {
+	if attachment == nil {
+		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q", "<nil>")
+	}
+	shaped, ok := attachment.(gzLink)
+	if !ok {
+		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q", attachment.Kind())
+	}
+	ip, partition, prefix := shaped.GZEndpoint()
+	if ip == "" || partition == "" || prefix == "" {
+		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q: gz endpoint is incomplete", attachment.Kind())
+	}
+	return WorldLink{
+		Cameras:     shaped.HasCameras(),
+		IP:          ip,
+		Partition:   partition,
+		TopicPrefix: prefix,
+	}, nil
+}
 
 // Kind 是 bundle vehicles 节里本 Port 的名字。
 const Kind = "easygo"
@@ -68,13 +102,9 @@ type Factory struct {
 func (Factory) Kind() string { return Kind }
 
 func (f Factory) New(_ context.Context, session contract.Session, robot contract.Robot, attachment orchestrator.Attachment, rawSection assets.Section) (orchestrator.VehiclePort, error) {
-	link, ok := attachment.(gazebo.Attachment)
-	if !ok {
-		kind := "<nil>"
-		if attachment != nil {
-			kind = attachment.Kind()
-		}
-		return nil, fmt.Errorf("easygo vehicle cannot attach to world kind %q", kind)
+	link, err := linkFrom(attachment)
+	if err != nil {
+		return nil, err
 	}
 	vehicle := Vehicle{
 		Engine:    f.Engine,
@@ -97,7 +127,7 @@ func (f Factory) New(_ context.Context, session contract.Session, robot contract
 	return vehicle, nil
 }
 
-func (f Factory) newVehicle(session contract.Session, robot contract.Robot, containerName string, link gazebo.Attachment) orchestrator.VehiclePort {
+func (f Factory) newVehicle(session contract.Session, robot contract.Robot, containerName string, link WorldLink) orchestrator.VehiclePort {
 	return Vehicle{
 		Engine:        f.Engine,
 		Options:       f.Options,
@@ -124,7 +154,7 @@ func (f Factory) Discover(ctx context.Context) ([]orchestrator.VehiclePort, erro
 		if !ok {
 			continue
 		}
-		ports = append(ports, f.newVehicle(contract.Session{}, robot, info.Name, gazebo.Attachment{}))
+		ports = append(ports, f.newVehicle(contract.Session{}, robot, info.Name, WorldLink{}))
 	}
 	return ports, nil
 }
