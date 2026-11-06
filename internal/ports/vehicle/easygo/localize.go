@@ -20,8 +20,9 @@ const (
 	// appInitTimeout 是等车端 init 报 succeeded 的窗口。车端要等 nav2 起来才算完，
 	// 本机慢的时候要几十秒。
 	appInitTimeout = 3 * time.Minute
-	// localizeTimeout 是"下发初始位姿后等收敛"的窗口。
-	localizeTimeout = 45 * time.Second
+	// localizeTimeout 是下发初始位姿后等收敛的窗口。单路几十秒就够；
+	// 同一台机器上再开几路 Gazebo 时扫描匹配要排队，45s 会在还差几米时超时。
+	localizeTimeout = 3 * time.Minute
 
 	// localizeToleranceMM 是"车端上报位姿 vs 下发位姿"的容差（mm）。
 	// 这是**判别力所在**的判据：坐标系搞错（world 与 map 差一个 origin_offset）是米级，
