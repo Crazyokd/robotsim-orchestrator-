@@ -10,13 +10,13 @@ import (
 )
 
 const (
-	// appRegistryDir is where the app image keeps its parameter registry. The
-	// registry ships with the easygo-param-manager deb, not easygo-app; the
-	// runtime launch reads this same path unless EASYGO_SIM_APP_CONFIG_DIR /
-	// PARAM_CFG_DIR overrides it, so a bind here reaches the live defaults.
-	// simenv overrides individual files inside it instead of replacing the
-	// directory, so every other default the image ships stays authoritative.
-	appRegistryDir = "/opt/sros/share/easygo-param-manager/cfg"
+	// appRegistryDir is where the app image keeps its parameter registry.
+	// Current runtime-sim ships it under easygo-app. The runtime launch reads
+	// this same path unless EASYGO_SIM_APP_CONFIG_DIR / PARAM_CFG_DIR overrides
+	// it, so a bind here reaches the live defaults. simenv overrides individual
+	// files inside it instead of replacing the directory, so every other
+	// default the image ships stays authoritative.
+	appRegistryDir = "/opt/sros/share/easygo-app/cfg"
 	// appConfigHostDir holds, per robot, the registry files simenv overrides.
 	appConfigHostDir = "app-config"
 

@@ -193,3 +193,36 @@ func TestDeviceMappings(t *testing.T) {
 		t.Fatal("nil devices must map to none")
 	}
 }
+
+func TestChooseGPUPrefersNVIDIAWhenItsDriverCanBeInjected(t *testing.T) {
+	mesa := []string{"/dev/dri/card1", "/dev/dri/renderD128"}
+	nvidia := []string{"/dev/dri/renderD129", "/dev/dri/card2"}
+	devices, runtime := chooseGPU(mesa, nvidia, true)
+	if runtime != "nvidia" || strings.Join(devices, ",") != "/dev/dri/card2,/dev/dri/renderD129" {
+		t.Fatalf("devices=%v runtime=%s", devices, runtime)
+	}
+	devices, runtime = chooseGPU(nil, nvidia, true)
+	if runtime != "nvidia" || len(devices) != 2 {
+		t.Fatalf("NVIDIA-only devices=%v runtime=%s", devices, runtime)
+	}
+}
+
+func TestChooseGPUFallsBackToMesaWithoutTheNVIDIARuntime(t *testing.T) {
+	mesa := []string{"/dev/dri/renderD128", "/dev/dri/card1"}
+	nvidia := []string{"/dev/dri/card2"}
+	devices, runtime := chooseGPU(mesa, nvidia, false)
+	if runtime != "" || strings.Join(devices, ",") != "/dev/dri/card1,/dev/dri/renderD128" {
+		t.Fatalf("devices=%v runtime=%s", devices, runtime)
+	}
+}
+
+func TestChooseGPUKeepsTheWholeDirectoryForOneVendor(t *testing.T) {
+	devices, runtime := chooseGPU([]string{"/dev/dri/card1"}, nil, false)
+	if devices != nil || runtime != "" {
+		t.Fatalf("devices=%v runtime=%s", devices, runtime)
+	}
+	devices, runtime = chooseGPU(nil, []string{"/dev/dri/card2"}, false)
+	if devices != nil || runtime != "" {
+		t.Fatalf("devices=%v runtime=%s", devices, runtime)
+	}
+}

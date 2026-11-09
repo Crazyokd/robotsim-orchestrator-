@@ -12,6 +12,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,17 +31,118 @@ const (
 
 var ErrNotFound = errors.New("container not found")
 
-// hostGPUDevice 是宿主 GPU 设备节点。
+// hostGPUDevice 是宿主 GPU 设备目录。
 const hostGPUDevice = "/dev/dri"
 
-// HostGPUDevices returns the GPU device nodes to map into a container when the
-// host exposes them. Without them ogre2 ray casting falls back to llvmpipe,
-// which cannot hold real time beyond one robot.
-func HostGPUDevices() []string {
+// drmSysfs 列出 DRM 节点。测试替换它，避免读到跑测试的那台机器。
+var drmSysfs = "/sys/class/drm"
+
+const nvidiaVendor = "0x10de"
+
+// nvidiaRuntimePath 是 NVIDIA 用户态驱动的注入入口。镜像里没有这份驱动，
+// 只挂 NVIDIA 的 DRM 节点会让 ogre2 在 eglInitialize 失败后退出。
+var nvidiaRuntimePath = "/usr/bin/nvidia-container-runtime"
+
+// GPU 是一次容器该使用的显示设备。Runtime 为空表示普通 runc。
+type GPU struct {
+	Devices []string
+	Runtime string
+}
+
+// HostGPU 选择容器的显示设备。有 NVIDIA 节点且宿主能注入其驱动时只用 NVIDIA，
+// 不把核显一起挂进去。没有这份驱动时不能挂 NVIDIA 节点，混合机器退回 Mesa 节点。
+// 只有一种显卡或读不到厂商时挂整份 /dev/dri。
+func HostGPU() GPU {
 	if _, err := os.Stat(hostGPUDevice); err != nil {
-		return nil
+		return GPU{}
 	}
-	return []string{hostGPUDevice}
+	mesa, nvidia := drmByVendor(drmSysfs)
+	devices, runtime := chooseGPU(mesa, nvidia, nvidiaRuntimePresent())
+	if devices == nil {
+		return GPU{Devices: []string{hostGPUDevice}}
+	}
+	return GPU{Devices: devices, Runtime: runtime}
+}
+
+// HostGPUDevices 是 HostGPU 的设备列表。没有 /dev/dri 时为空。
+func HostGPUDevices() []string {
+	return HostGPU().Devices
+}
+
+func nvidiaRuntimePresent() bool {
+	_, err := os.Stat(nvidiaRuntimePath)
+	return err == nil
+}
+
+// chooseGPU 在调用方已经确认 /dev/dri 存在时选择节点。devices 为 nil 表示挂整份目录。
+func chooseGPU(mesa, nvidia []string, nvidiaRuntime bool) (devices []string, runtime string) {
+	if len(nvidia) > 0 && nvidiaRuntime {
+		sort.Strings(nvidia)
+		return nvidia, "nvidia"
+	}
+	if len(mesa) > 0 && len(nvidia) > 0 {
+		sort.Strings(mesa)
+		return mesa, ""
+	}
+	return nil, ""
+}
+
+func drmByVendor(sysfs string) (mesa, nvidia []string) {
+	entries, err := os.ReadDir(sysfs)
+	if err != nil {
+		return nil, nil
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !drmNode(name) {
+			continue
+		}
+		vendor, err := os.ReadFile(filepath.Join(sysfs, name, "device", "vendor"))
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(hostGPUDevice, name)
+		if strings.EqualFold(strings.TrimSpace(string(vendor)), nvidiaVendor) {
+			nvidia = append(nvidia, path)
+			continue
+		}
+		mesa = append(mesa, path)
+	}
+	return mesa, nvidia
+}
+
+func appendRuntimeEnv(env []string, runtime string) []string {
+	if runtime != "nvidia" {
+		return env
+	}
+	if !envHasPrefix(env, "NVIDIA_VISIBLE_DEVICES=") {
+		env = append(env, "NVIDIA_VISIBLE_DEVICES=all")
+	}
+	if !envHasPrefix(env, "NVIDIA_DRIVER_CAPABILITIES=") {
+		env = append(env, "NVIDIA_DRIVER_CAPABILITIES=all")
+	}
+	return env
+}
+
+func envHasPrefix(env []string, prefix string) bool {
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func drmNode(name string) bool {
+	if strings.HasPrefix(name, "renderD") {
+		_, err := strconv.Atoi(strings.TrimPrefix(name, "renderD"))
+		return err == nil
+	}
+	if !strings.HasPrefix(name, "card") {
+		return false
+	}
+	_, err := strconv.Atoi(strings.TrimPrefix(name, "card"))
+	return err == nil
 }
 
 type ContainerSpec struct {
@@ -50,6 +154,8 @@ type ContainerSpec struct {
 	Network string
 	Ipc     string
 	Devices []string
+	// Runtime 为空时用守护进程的默认运行时。NVIDIA 设备为 "nvidia"。
+	Runtime string
 	Labels  map[string]string
 }
 
@@ -112,18 +218,23 @@ func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
 	}
+	env = appendRuntimeEnv(env, spec.Runtime)
+	hostConfig := map[string]any{
+		"NetworkMode": spec.Network,
+		"IpcMode":     spec.Ipc,
+		"Binds":       spec.Binds,
+		"Devices":     deviceMappings(spec.Devices),
+		"AutoRemove":  false,
+	}
+	if spec.Runtime != "" {
+		hostConfig["Runtime"] = spec.Runtime
+	}
 	body := map[string]any{
-		"Image":  spec.Image,
-		"Cmd":    spec.Command,
-		"Env":    env,
-		"Labels": spec.Labels,
-		"HostConfig": map[string]any{
-			"NetworkMode": spec.Network,
-			"IpcMode":     spec.Ipc,
-			"Binds":       spec.Binds,
-			"Devices":     deviceMappings(spec.Devices),
-			"AutoRemove":  false,
-		},
+		"Image":      spec.Image,
+		"Cmd":        spec.Command,
+		"Env":        env,
+		"Labels":     spec.Labels,
+		"HostConfig": hostConfig,
 	}
 	var created struct {
 		ID string `json:"Id"`

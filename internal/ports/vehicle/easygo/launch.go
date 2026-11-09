@@ -8,7 +8,6 @@ import (
 
 	"git.standard-robots.com/yicao/sim/internal/assets"
 	"git.standard-robots.com/yicao/sim/internal/contract"
-	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
 )
 
 func launchArgs(robot contract.Robot, topicPrefix string, runtime vehicleRuntime, useRviz, useGzGui, useCameras bool) []string {
@@ -68,13 +67,6 @@ func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRunti
 		// owns PORT (the app's HTTP port); only mDNS needs a per-robot offset.
 		"MDNS_PORT": strconv.Itoa(runtime.mdnsPort),
 	}
-}
-
-func guiDevices(gui bool) []string {
-	if !gui {
-		return nil
-	}
-	return docker.HostGPUDevices()
 }
 
 // gzGuiAssetBind mounts this checkout's deploy/assets at /opt/simenv so the

@@ -75,6 +75,7 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSec
 		}
 		worldCmd = append(worldCmd, "--cameras", strings.Join(cameraRobots, ","))
 	}
+	gpu := docker.HostGPU()
 	if err := w.Engine.Start(ctx, docker.ContainerSpec{
 		Name:    w.containerName(),
 		Image:   w.Options.EnvImage,
@@ -86,7 +87,8 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSec
 		},
 		Network: "host",
 		Ipc:     "host",
-		Devices: hostDevices(),
+		Devices: gpu.Devices,
+		Runtime: gpu.Runtime,
 		Labels:  map[string]string{docker.LabelManaged: "true", docker.LabelRole: docker.RoleWorld},
 	}); err != nil {
 		return nil, err
@@ -223,10 +225,4 @@ func readReady(ctx context.Context, engine docker.Engine, container string) (pro
 		return process.ReadyReport{}, fmt.Errorf("decode world readiness: %w", err)
 	}
 	return report, nil
-}
-
-// hostDevices 与车端 GUI 共用一套：宿主有 GPU 就把 /dev/dri 挂进容器，
-// 否则 ogre2 退回 llvmpipe，多车跑不到实时。
-func hostDevices() []string {
-	return docker.HostGPUDevices()
 }

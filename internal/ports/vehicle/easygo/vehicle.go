@@ -121,6 +121,10 @@ func (v Vehicle) Start(ctx context.Context) error {
 	if v.SessionName != "" {
 		labels[sessionLabel] = v.SessionName
 	}
+	gpu := docker.GPU{}
+	if useRviz || useGzGui {
+		gpu = docker.HostGPU()
+	}
 	if err := v.Engine.Start(ctx, docker.ContainerSpec{
 		Name:    v.containerName(),
 		Image:   v.Options.AppImage,
@@ -129,7 +133,8 @@ func (v Vehicle) Start(ctx context.Context) error {
 		Binds:   binds,
 		Network: "host",
 		Ipc:     "host",
-		Devices: guiDevices(useRviz || useGzGui),
+		Devices: gpu.Devices,
+		Runtime: gpu.Runtime,
 		Labels:  labels,
 	}); err != nil {
 		return err
