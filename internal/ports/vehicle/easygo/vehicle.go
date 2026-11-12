@@ -53,6 +53,14 @@ func (v Vehicle) Start(ctx context.Context) error {
 	if err := v.Options.Validate(); err != nil {
 		return err
 	}
+	if v.Slot < 0 || v.Slot > maxSessionSlot {
+		return fmt.Errorf("session slot %d exceeds easygo resource limit %d", v.Slot, maxSessionSlot)
+	}
+	for _, robot := range v.Session.Robots {
+		if robot.Index > maxRobotIndexPerSlot {
+			return fmt.Errorf("robot index %d exceeds easygo resource block limit %d", robot.Index, maxRobotIndexPerSlot)
+		}
+	}
 	if strings.TrimSpace(v.Options.DataVolumePrefix) != "" && (len(v.Session.Robots) != 1 || v.Slot != 0) {
 		return fmt.Errorf("data-volume-prefix requires exactly one robot in slot 0; per-robot sync registry binds are unavailable")
 	}

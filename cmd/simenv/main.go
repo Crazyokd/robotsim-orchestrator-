@@ -45,7 +45,7 @@ func main() {
 				if err != nil {
 					return nil, err
 				}
-				return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions), SessionName: cfg.SessionName}, nil
+				return gazebo.DockerWorld{Engine: engine, Options: deref(worldOptions), SessionName: cfg.SessionName, Slot: cfg.Slot}, nil
 			},
 			nullworld.Kind: func(cfg contract.StartConfig) (orchestrator.WorldPort, error) {
 				return nullworld.World{SessionName: cfg.SessionName}, nil

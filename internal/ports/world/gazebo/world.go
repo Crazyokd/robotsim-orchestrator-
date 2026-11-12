@@ -25,6 +25,8 @@ type DockerWorld struct {
 	// SessionName 是这次会话的名字。空只留给未绑定会话的零值；绑定之后容器名和
 	// partition 都带上这个名字。
 	SessionName string
+	// Slot 是编排分来的资源槽。世界 Port 自己用它错开 ROS domain，编排不解释这个数。
+	Slot int
 }
 
 // Kind 满足框架的世界种类约定：bundle 的 worlds.gazebo 节与会话标记按它路由。
@@ -44,12 +46,19 @@ func (w DockerWorld) partition() string {
 	return Partition + "-" + w.SessionName
 }
 
+func (w DockerWorld) rosDomainID() int {
+	return EnvROSDomainID + w.Slot*100
+}
+
 func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSection assets.Section) ([]orchestrator.Attachment, error) {
 	if err := session.Validate(); err != nil {
 		return nil, err
 	}
 	if err := w.Options.Validate(); err != nil {
 		return nil, err
+	}
+	if w.Slot < 0 || w.Slot > 2 {
+		return nil, fmt.Errorf("session slot %d exceeds gazebo ROS domain limit 2", w.Slot)
 	}
 	// worlds.gazebo 节严格解析：坏节直接失败。SDF 路径目前仍按目录约定
 	// 解析（世界进程在容器内读），节的运行时消费随世界进程接线演进。
@@ -83,7 +92,7 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSec
 		Env: map[string]string{
 			"GZ_IP":         GZIP,
 			"GZ_PARTITION":  w.partition(),
-			"ROS_DOMAIN_ID": strconv.Itoa(EnvROSDomainID),
+			"ROS_DOMAIN_ID": strconv.Itoa(w.rosDomainID()),
 		},
 		Network: "host",
 		Ipc:     "host",

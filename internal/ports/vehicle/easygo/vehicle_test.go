@@ -121,6 +121,43 @@ func TestNamedSessionShiftsContainerAndPorts(t *testing.T) {
 	}
 }
 
+func TestSlotShiftsHostResourcesTheVehicleOwns(t *testing.T) {
+	base := runtimeFor(10, 0)
+	shifted := runtimeFor(1, 1)
+	if shifted.bluetoothUDPPort == base.bluetoothUDPPort || shifted.webgzDisplay == base.webgzDisplay || shifted.rvizDisplay == base.rvizDisplay || shifted.rosDomainID == base.rosDomainID || runtimeFor(1, 0).slamWebPort == runtimeFor(9, 0).slamWebPort {
+		t.Fatalf("slot 1 reused slot 0 resources: %+v", shifted)
+	}
+}
+
+func TestStartRejectsSlotResourceOverflow(t *testing.T) {
+	cases := []struct {
+		name   string
+		robots []contract.Robot
+		slot   int
+	}{
+		{name: "robot index", robots: []contract.Robot{{Index: 11, Name: "robot11"}}},
+		{name: "session slot", robots: []contract.Robot{{Index: 1, Name: "robot1"}}, slot: 3},
+		{name: "negative slot", robots: []contract.Robot{{Index: 1, Name: "robot1"}}, slot: -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+			session := contract.Session{World: "simple", Robots: tc.robots}
+			factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataRoot: t.TempDir()}, Slot: tc.slot}
+			vehicle, err := factory.New(context.Background(), session, tc.robots[0], testLink(tc.robots[0]), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := vehicle.Start(context.Background()); err == nil {
+				t.Fatal("resource overflow must fail")
+			}
+			if len(engine.started) != 0 {
+				t.Fatalf("resource guard started containers: %v", engine.started)
+			}
+		})
+	}
+}
+
 func TestFactoryNewReadsTheGazeboAttachment(t *testing.T) {
 	factory := Factory{Engine: &fakeEngine{infos: map[string]docker.ContainerInfo{}}}
 	port, err := factory.New(context.Background(), oneRobotSession(t), contract.Robot{Index: 1, Name: "robot1"}, testLink(contract.Robot{Index: 1, Name: "robot1"}), nil)

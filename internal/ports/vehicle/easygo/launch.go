@@ -29,11 +29,11 @@ func launchArgs(robot contract.Robot, topicPrefix string, runtime vehicleRuntime
 		fmt.Sprintf("observe_port:=%d", runtime.observePort),
 		fmt.Sprintf("webgz_web_port:=%d", runtime.webGZWebPort),
 		fmt.Sprintf("webgz_rfb_port:=%d", runtime.webGZRFBPort),
-		fmt.Sprintf("webgz_display:=:%d", 10+robot.Index*10),
+		fmt.Sprintf("webgz_display:=:%d", runtime.webgzDisplay),
 		"webgz_log_dir:=/tmp/webgz-" + robot.Name,
 		fmt.Sprintf("rviz_web_port:=%d", runtime.rvizWebPort),
 		fmt.Sprintf("rviz_rfb_port:=%d", runtime.rvizRFBPort),
-		fmt.Sprintf("rviz_display:=:%d", 11+robot.Index*10),
+		fmt.Sprintf("rviz_display:=:%d", runtime.rvizDisplay),
 		"rviz_log_dir:=/tmp/rviz-" + robot.Name,
 		"serial_number:=" + robot.Name,
 		"easygo_app_param_db_path:=" + runtime.runtimeRoot + "/db/cfg.db3",
@@ -62,7 +62,7 @@ func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRunti
 		// Multi-AMR peer discovery: a UDP broadcast stands in for the BLE peer
 		// link a real vehicle uses, so two robots in one host can see each other.
 		"EASYGO_BLUETOOTH_TRANSPORT": "udp",
-		"EASYGO_BLUETOOTH_UDP_PORT":  strconv.Itoa(multiAMRPeerPort),
+		"EASYGO_BLUETOOTH_UDP_PORT":  strconv.Itoa(runtime.bluetoothUDPPort),
 		"ENABLE_MULTI_AMR_AVOIDANCE": "true",
 		// The sync service advertises this port for mDNS discovery. The launch
 		// owns PORT (the app's HTTP port); only mDNS needs a per-robot offset.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +103,31 @@ func TestNamedSessionKeepsItsOwnContainerAndPartition(t *testing.T) {
 	}
 	if (DockerWorld{}).containerName() != WorldContainer || (DockerWorld{}).partition() != Partition {
 		t.Fatal("the unnamed session keeps the single-session container and partition")
+	}
+}
+
+func TestSlotShiftsTheWorldRosDomain(t *testing.T) {
+	if (DockerWorld{}).rosDomainID() != EnvROSDomainID {
+		t.Fatal("slot 0 keeps the single-session domain")
+	}
+	if (DockerWorld{Slot: 1}).rosDomainID() != EnvROSDomainID+100 {
+		t.Fatal("each slot keeps its own ROS domain")
+	}
+}
+
+func TestStartRejectsWorldSlotBeyondRosDomainRange(t *testing.T) {
+	for _, slot := range []int{3, -1} {
+		t.Run(strconv.Itoa(slot), func(t *testing.T) {
+			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+			world := DockerWorld{Engine: engine, Slot: slot, Options: Options{EnvImage: "simenv-world:local"}}
+			session := contract.Session{World: "simple", Robots: []contract.Robot{{Index: 1, Name: "robot1"}}}
+			if _, err := world.Start(context.Background(), session, nil); err == nil || !strings.Contains(err.Error(), "exceeds gazebo ROS domain limit") {
+				t.Fatalf("start error=%v", err)
+			}
+			if len(engine.started) != 0 {
+				t.Fatalf("world guard started containers: %v", engine.started)
+			}
+		})
 	}
 }
 

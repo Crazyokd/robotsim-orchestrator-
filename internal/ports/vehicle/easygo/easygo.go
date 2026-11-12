@@ -44,6 +44,8 @@ const (
 	mdnsPortBase           = 25353
 	syncMembershipPortBase = 25354
 	syncPortStride         = 100
+	maxRobotIndexPerSlot   = 10
+	maxSessionSlot         = 2
 )
 
 // vehicleRuntime 是一台车的全部派生端口与 ROS domain：全部由车序号算出。
@@ -62,6 +64,9 @@ type vehicleRuntime struct {
 	slamWebPort        int
 	mdnsPort           int
 	syncMembershipPort int
+	bluetoothUDPPort   int
+	webgzDisplay       int
+	rvizDisplay        int
 }
 
 func runtimeFor(index, slot int) vehicleRuntime {
@@ -80,9 +85,12 @@ func runtimeFor(index, slot int) vehicleRuntime {
 		slamWebPort:        slamWebPort(index),
 		mdnsPort:           mdnsPortBase + (index-1)*syncPortStride,
 		syncMembershipPort: syncMembershipPortBase + (index-1)*syncPortStride,
+		bluetoothUDPPort:   multiAMRPeerPort + slot,
+		webgzDisplay:       10 + index*10 + slot*1000,
+		rvizDisplay:        11 + index*10 + slot*1000,
 	}
 	if slot > 0 {
-		// 命名会话挪出 default 的端口块。HTTP 一类加 10000*slot，ROS domain 加 20*slot。
+		// 命名会话挪出 default 的端口块。HTTP 一类加 10000*slot，ROS domain 加 100*slot。
 		shift := slot * 10000
 		rt.frontendPort += shift
 		rt.apiPort += shift
@@ -93,7 +101,7 @@ func runtimeFor(index, slot int) vehicleRuntime {
 		rt.webGZRFBPort += shift
 		rt.rvizWebPort += shift
 		rt.rvizRFBPort += shift
-		rt.rosDomainID += slot * 20
+		rt.rosDomainID += slot * 100
 		rt.slamWebPort += shift
 		rt.mdnsPort += shift
 		rt.syncMembershipPort += shift
@@ -102,8 +110,5 @@ func runtimeFor(index, slot int) vehicleRuntime {
 }
 
 func slamWebPort(index int) int {
-	if index == 1 {
-		return 8088
-	}
-	return 8018 + (index-2)*10
+	return 8088 + (index-1)*10
 }
