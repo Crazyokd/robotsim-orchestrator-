@@ -19,26 +19,19 @@ const (
 	// appConfigHostDir holds, per robot, the registry files simenv overrides.
 	appConfigHostDir = "app-config"
 
-	// vehicleSerialRegistry carries the vehicle identity.
-	vehicleSerialRegistry = "param-registry/function.basic_setting.yaml"
 	// syncRegistry carries the sync service's cluster-gossip membership port.
 	syncRegistry = "param-registry/function.sync.yaml"
-	// vehicleSerialKey / syncMembershipPortKey are the registry entries simenv
-	// pins per robot.
-	vehicleSerialKey      = "main.vehicle_serial_no"
+	// syncMembershipPortKey is the registry entry simenv pins per robot.
 	syncMembershipPortKey = "sync.membership_port"
 )
 
-// initializeAppConfig pins this robot's own parameter values and returns the
-// mounts that put them in place. It runs before the vehicle container starts:
-// easygo-app reads these parameters during startup, so they cannot be applied
-// afterwards.
+// initializeSyncConfig pins this robot's sync membership port and returns the
+// mount that puts it in place. Vehicle identity is supplied by the launch's
+// serial_number argument, so simenv does not rewrite its parameter registry.
 //
-// The image already ships every default, so initialization only overwrites the
-// parameters that must differ per robot. Each one is read out of the image,
-// patched in place in Go, and mounted back over the image's own file; nothing
-// else about the registry changes.
-func (v Vehicle) initializeAppConfig(ctx context.Context, appImage, hostSros string) ([]string, error) {
+// The image already ships the default, so initialization reads that registry,
+// patches the per-robot port, and mounts the result back over the image file.
+func (v Vehicle) initializeSyncConfig(ctx context.Context, runtimeImage, hostSros string) ([]string, error) {
 	overrides := v.initialRegistryDefaults()
 	hostDir := filepath.Join(hostSros, appConfigHostDir)
 	if err := os.RemoveAll(hostDir); err != nil {
@@ -56,31 +49,26 @@ func (v Vehicle) initializeAppConfig(ctx context.Context, appImage, hostSros str
 		}
 		staged[name] = override.Registry
 
-		registry, err := v.Engine.ReadImageFile(ctx, appImage, appRegistryDir+"/"+override.Registry)
+		registry, err := v.Engine.ReadImageFile(ctx, runtimeImage, appRegistryDir+"/"+override.Registry)
 		if err != nil {
-			return nil, fmt.Errorf("read %s from %s: %w", override.Registry, appImage, err)
+			return nil, fmt.Errorf("read %s from %s: %w", override.Registry, runtimeImage, err)
 		}
 		patched, err := patchRegistryDefault(registry, override.Key, override.Value)
 		if err != nil {
-			return nil, fmt.Errorf("initialize app config for %s: %w", v.Robot.Name, err)
+			return nil, fmt.Errorf("initialize sync config for %s: %w", v.Robot.Name, err)
 		}
 		hostPath := filepath.Join(hostDir, name)
 		if err := os.WriteFile(hostPath, patched, 0o644); err != nil {
-			return nil, fmt.Errorf("initialize app config for %s: %w", v.Robot.Name, err)
+			return nil, fmt.Errorf("initialize sync config for %s: %w", v.Robot.Name, err)
 		}
 		binds = append(binds, hostPath+":"+appRegistryDir+"/"+override.Registry)
 	}
 	return binds, nil
 }
 
-// initialRegistryDefaults lists the parameter defaults simenv pins for one
-// robot. Add an entry here to make another parameter differ per vehicle.
+// initialRegistryDefaults lists the registry defaults simenv must pin per robot.
 func (v Vehicle) initialRegistryDefaults() []registryOverride {
 	return []registryOverride{
-		// Vehicle identity. It is the multi-AMR peer id: with it empty every
-		// vehicle advertises the same one, peers discard each other as their own
-		// frames, and a multi-vehicle world never converges.
-		{Registry: vehicleSerialRegistry, Key: vehicleSerialKey, Value: strconv.Quote(v.Robot.Name)},
 		// A UDP bind for the sync service's cluster-gossip discovery. Vehicles
 		// sharing one host network would otherwise collide and easygo-app would
 		// abort at startup.

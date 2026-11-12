@@ -24,25 +24,8 @@ type fakeEngine struct {
 	infos      map[string]docker.ContainerInfo
 }
 
-// fakeRegistry / fakeSyncRegistry mirror the shape of the registry files the app
-// image ships: main.vehicle_serial_no has no default_value, sync.membership_port
-// has one that collides across vehicles on a shared host network.
-const fakeRegistry = `items:
-  - key: main.vehicle_type
-    name: 车型
-    value_type: string
-
-  - key: main.vehicle_serial_no
-    name: 车辆序列号
-    value_type: string
-    is_coverable: 0
-
-  - key: main.nickname
-    name: 自定义名称
-    default_value: "EasyGo"
-    value_type: string
-`
-
+// fakeSyncRegistry mirrors the registry file the runtime image ships: its default
+// membership port collides across vehicles on a shared host network.
 const fakeSyncRegistry = `items:
   - key: sync.discovery_backend
     default_value: cluster-gossip
@@ -63,8 +46,6 @@ func (f *fakeEngine) ReadImageFile(_ context.Context, _, path string) ([]byte, e
 		}
 	}
 	switch filepath.Base(path) {
-	case filepath.Base(vehicleSerialRegistry):
-		return []byte(fakeRegistry), nil
 	case filepath.Base(syncRegistry):
 		return []byte(fakeSyncRegistry), nil
 	}
@@ -303,7 +284,7 @@ func TestViewersArePerRobot(t *testing.T) {
 	}
 }
 
-func TestStartInitializesEachVehicleRegistry(t *testing.T) {
+func TestStartInitializesEachVehicleSyncRegistry(t *testing.T) {
 	dataRoot := t.TempDir()
 	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
 	factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataRoot: dataRoot}}
@@ -321,9 +302,7 @@ func TestStartInitializesEachVehicleRegistry(t *testing.T) {
 		}
 	}
 	wantReadPaths := []string{
-		"/opt/sros/share/easygo-param-manager/cfg/" + vehicleSerialRegistry,
 		"/opt/sros/share/easygo-param-manager/cfg/" + syncRegistry,
-		"/opt/sros/share/easygo-param-manager/cfg/" + vehicleSerialRegistry,
 		"/opt/sros/share/easygo-param-manager/cfg/" + syncRegistry,
 	}
 	if !slices.Equal(engine.readPaths, wantReadPaths) {
@@ -352,7 +331,6 @@ func TestStartInitializesEachVehicleRegistry(t *testing.T) {
 		}
 		hostDir := filepath.Join(dataRoot, want.name, appConfigHostDir)
 		wantBinds := []string{
-			filepath.Join(hostDir, "function.basic_setting.yaml") + ":" + appRegistryDir + "/" + vehicleSerialRegistry,
 			filepath.Join(hostDir, "function.sync.yaml") + ":" + appRegistryDir + "/" + syncRegistry,
 		}
 		for _, wantBind := range wantBinds {
@@ -362,16 +340,6 @@ func TestStartInitializesEachVehicleRegistry(t *testing.T) {
 		}
 		if len(spec.Binds) != 1+len(wantBinds) {
 			t.Fatalf("%s binds=%v", want.name, spec.Binds)
-		}
-		registry, err := os.ReadFile(filepath.Join(hostDir, "function.basic_setting.yaml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(registry), "default_value: \""+want.name+"\"") {
-			t.Fatalf("%s serial not pinned:\n%s", want.name, registry)
-		}
-		if !strings.Contains(string(registry), `default_value: "EasyGo"`) {
-			t.Fatalf("%s unrelated entries disturbed:\n%s", want.name, registry)
 		}
 		sync, err := os.ReadFile(filepath.Join(hostDir, "function.sync.yaml"))
 		if err != nil {

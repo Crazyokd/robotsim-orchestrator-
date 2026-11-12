@@ -96,11 +96,11 @@ func (v Vehicle) Start(ctx context.Context) error {
 		if err := os.Chmod(hostSros, 0o777); err != nil {
 			return fmt.Errorf("make %s writable for the vehicle user: %w", hostSros, err)
 		}
-		appConfigBinds, err := v.initializeAppConfig(ctx, v.Options.AppImage, hostSros)
+		syncConfigBinds, err := v.initializeSyncConfig(ctx, v.Options.AppImage, hostSros)
 		if err != nil {
 			return err
 		}
-		binds = append([]string{hostSros + ":" + runtimeRoot}, appConfigBinds...)
+		binds = append([]string{hostSros + ":" + runtimeRoot}, syncConfigBinds...)
 		if handover := worldHandoverBind(v.AssetsDir, v.Session.World); handover != "" {
 			binds = append(binds, handover)
 		}
