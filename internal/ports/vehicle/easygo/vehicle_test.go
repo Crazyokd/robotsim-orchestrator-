@@ -438,6 +438,46 @@ func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
 	}
 }
 
+func TestStartRejectsParallelNamedVolumeResources(t *testing.T) {
+	cases := []struct {
+		name   string
+		robots []contract.Robot
+		slot   int
+	}{
+		{
+			name:   "multiple robots",
+			robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}},
+		},
+		{
+			name:   "parallel session slot",
+			robots: []contract.Robot{{Index: 1, Name: "robot1"}},
+			slot:   1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+			session := contract.Session{World: "simple", Robots: tc.robots}
+			factory := Factory{
+				Engine:      engine,
+				Options:     Options{AppImage: "runtime-sim:tag", DataVolumePrefix: "ci-1"},
+				SessionName: "session",
+				Slot:        tc.slot,
+			}
+			vehicle, err := factory.New(context.Background(), session, tc.robots[0], testLink(tc.robots[0]), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := vehicle.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "data-volume-prefix requires exactly one robot in slot 0") {
+				t.Fatalf("start error=%v", err)
+			}
+			if len(engine.started) != 0 {
+				t.Fatalf("named-volume guard started containers: %v", engine.started)
+			}
+		})
+	}
+}
+
 func TestWorldHandoverBindSkipsWorldsTheEnvironmentDoesNotShip(t *testing.T) {
 	dir := t.TempDir()
 	writeWorldSDF(t, dir, "corridor")

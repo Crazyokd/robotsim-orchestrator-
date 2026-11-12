@@ -53,6 +53,9 @@ func (v Vehicle) Start(ctx context.Context) error {
 	if err := v.Options.Validate(); err != nil {
 		return err
 	}
+	if strings.TrimSpace(v.Options.DataVolumePrefix) != "" && (len(v.Session.Robots) != 1 || v.Slot != 0) {
+		return fmt.Errorf("data-volume-prefix requires exactly one robot in slot 0; per-robot sync registry binds are unavailable")
+	}
 	for _, index := range v.Options.RvizRobots {
 		if index < 1 || index > len(v.Session.Robots) {
 			return fmt.Errorf("rviz robot %d outside robot count %d", index, len(v.Session.Robots))
