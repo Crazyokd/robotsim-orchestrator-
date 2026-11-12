@@ -18,6 +18,7 @@ import (
 
 type fakeEngine struct {
 	imageFiles map[string]string
+	readPaths  []string
 	started    []docker.ContainerSpec
 	stopped    []string
 	infos      map[string]docker.ContainerInfo
@@ -55,6 +56,7 @@ const fakeSyncRegistry = `items:
 
 // ReadImageFile stands in for reading the image's registry files.
 func (f *fakeEngine) ReadImageFile(_ context.Context, _, path string) ([]byte, error) {
+	f.readPaths = append(f.readPaths, path)
 	if f.imageFiles != nil {
 		if content, ok := f.imageFiles[path]; ok {
 			return []byte(content), nil
@@ -317,6 +319,15 @@ func TestStartInitializesEachVehicleRegistry(t *testing.T) {
 		if err := vehicle.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+	}
+	wantReadPaths := []string{
+		"/opt/sros/share/easygo-param-manager/cfg/" + vehicleSerialRegistry,
+		"/opt/sros/share/easygo-param-manager/cfg/" + syncRegistry,
+		"/opt/sros/share/easygo-param-manager/cfg/" + vehicleSerialRegistry,
+		"/opt/sros/share/easygo-param-manager/cfg/" + syncRegistry,
+	}
+	if !slices.Equal(engine.readPaths, wantReadPaths) {
+		t.Fatalf("registry reads=%v, want %v", engine.readPaths, wantReadPaths)
 	}
 
 	apps := map[string]docker.ContainerSpec{}
