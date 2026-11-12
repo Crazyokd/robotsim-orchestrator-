@@ -188,6 +188,9 @@ func TestVehicleStartConfiguresTheContainer(t *testing.T) {
 	if appSpec.Env["GZ_IP"] != gazebo.GZIP || appSpec.Env["GZ_PARTITION"] != gazebo.Partition || appSpec.Env["ROS_DOMAIN_ID"] != "11" || appSpec.Env["BACKEND_PORT"] != "18191" {
 		t.Fatalf("app env=%v", appSpec.Env)
 	}
+	if appSpec.Env["PARAM_CFG_DIR"] != appRegistryDir {
+		t.Fatalf("parameter config dir=%q, want %q", appSpec.Env["PARAM_CFG_DIR"], appRegistryDir)
+	}
 }
 
 func TestLaunchUsesTopicPrefixForBridgeName(t *testing.T) {

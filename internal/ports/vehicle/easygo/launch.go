@@ -52,6 +52,7 @@ func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRunti
 		"SERIAL_NUMBER":                 robot.Name,
 		"MQTT_BROKER_PORT":              strconv.Itoa(runtime.mqttPort),
 		"BACKEND_PORT":                  strconv.Itoa(runtime.voicePort),
+		"PARAM_CFG_DIR":                 appRegistryDir,
 		"PARAM_DB_PATH":                 runtime.runtimeRoot + "/db/cfg.db3",
 		"DATABASE_URL":                  "sqlite://" + runtime.runtimeRoot + "/db/easygo.db?mode=rwc",
 		"EASYGO_SIM_WORLD":              session.World + ".sdf",
