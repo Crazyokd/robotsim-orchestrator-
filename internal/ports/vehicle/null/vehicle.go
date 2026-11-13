@@ -25,6 +25,17 @@ type Factory struct {
 
 func (Factory) Kind() string { return Kind }
 
+func (Factory) ValidateStart(_ context.Context, session contract.Session, rawSection assets.Section) error {
+	if err := session.Validate(); err != nil {
+		return err
+	}
+	if len(rawSection) > 0 {
+		_, err := ParseSection(rawSection)
+		return err
+	}
+	return nil
+}
+
 // New 造一台车的 Port。配对约定与所有车端一致：只认 null 世界的
 // Attachment，认不出直接失败——跨种类配对在构造期就炸，不带进运行期。
 func (f Factory) New(_ context.Context, session contract.Session, robot contract.Robot, attachment orchestrator.Attachment, rawSection assets.Section) (orchestrator.VehiclePort, error) {

@@ -47,32 +47,8 @@ type Vehicle struct {
 }
 
 func (v Vehicle) Start(ctx context.Context) error {
-	if err := v.Session.Validate(); err != nil {
+	if err := v.Options.validateStart(v.Session, v.Slot); err != nil {
 		return err
-	}
-	if err := v.Options.Validate(); err != nil {
-		return err
-	}
-	if v.Slot < 0 || v.Slot > maxSessionSlot {
-		return fmt.Errorf("session slot %d exceeds easygo resource limit %d", v.Slot, maxSessionSlot)
-	}
-	for _, robot := range v.Session.Robots {
-		if robot.Index > maxRobotIndexPerSlot {
-			return fmt.Errorf("robot index %d exceeds easygo resource block limit %d", robot.Index, maxRobotIndexPerSlot)
-		}
-	}
-	if strings.TrimSpace(v.Options.DataVolumePrefix) != "" && (len(v.Session.Robots) != 1 || v.Slot != 0) {
-		return fmt.Errorf("data-volume-prefix requires exactly one robot in slot 0; per-robot sync registry binds are unavailable")
-	}
-	for _, index := range v.Options.RvizRobots {
-		if index < 1 || index > len(v.Session.Robots) {
-			return fmt.Errorf("rviz robot %d outside robot count %d", index, len(v.Session.Robots))
-		}
-	}
-	for _, index := range v.Options.GzGuiRobots {
-		if index < 1 || index > len(v.Session.Robots) {
-			return fmt.Errorf("gz-gui robot %d outside robot count %d", index, len(v.Session.Robots))
-		}
 	}
 	runtime := v.runtime()
 	useRviz := v.Options.wantsRviz(v.Robot.Index)
@@ -91,15 +67,10 @@ func (v Vehicle) Start(ctx context.Context) error {
 		}
 		binds = append(binds, prefix+"-"+v.Robot.Name+":"+runtimeRoot)
 	} else {
-		dataRoot := v.Options.DataRoot
-		if dataRoot == "" {
-			cache, err := os.UserCacheDir()
-			if err != nil {
-				return err
-			}
-			dataRoot = filepath.Join(cache, "simenv")
+		hostSros, err := v.dataPath()
+		if err != nil {
+			return err
 		}
-		hostSros := filepath.Join(dataRoot, v.SessionName, v.Robot.Name)
 		if err := os.MkdirAll(hostSros, 0o755); err != nil {
 			return err
 		}
@@ -156,6 +127,18 @@ func (v Vehicle) Start(ctx context.Context) error {
 	return nil
 }
 
+func (v Vehicle) dataPath() (string, error) {
+	root := v.Options.DataRoot
+	if root == "" {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+		root = filepath.Join(cache, "simenv")
+	}
+	return filepath.Abs(filepath.Join(root, v.SessionName, v.Robot.Name))
+}
+
 func (v Vehicle) Status(ctx context.Context) (orchestrator.VehicleStatus, error) {
 	info, err := v.Engine.Inspect(ctx, v.containerName())
 	if err != nil {
@@ -180,9 +163,9 @@ func (v Vehicle) containerName() string {
 		return v.ContainerName
 	}
 	if v.SessionName == "" {
-		return "simenv-" + v.Robot.Name
+		return "simenv-vehicle-" + v.Robot.Name
 	}
-	return "simenv-" + v.SessionName + "-" + v.Robot.Name
+	return "simenv-vehicle-" + v.SessionName + "-" + v.Robot.Name
 }
 
 func (v Vehicle) runtime() vehicleRuntime {
@@ -234,29 +217,37 @@ func waitForAppAPI(ctx context.Context, apiPort int) error {
 // 地图主名与 bundle 声明不一致直接失败（世界换了而地图没跟上，不留半成品）；
 // 站点与位姿从世界系换算成地图系（mm / mrad）后再下发——换算错了是本 Port 报错。
 func (v Vehicle) Provision(ctx context.Context, p orchestrator.Provisioning) error {
-	if v.MapExportPath == "" {
-		return fmt.Errorf("provision %s: vehicle has no vehicles.%s section", v.Robot.Name, Kind)
-	}
-	archive, err := os.ReadFile(v.MapExportPath)
+	archive, err := v.mapArchive()
 	if err != nil {
-		return fmt.Errorf("world %s declares map %q but ships no map archive: %w", v.Session.World, v.Section.MapName, err)
-	}
-	mapName, err := worldMapName(archive)
-	if err != nil {
-		return fmt.Errorf("world %s map: %w", v.Session.World, err)
-	}
-	if mapName != v.Section.MapName {
-		return fmt.Errorf(
-			"world %s: map archive holds %q but bundle declares %q", v.Session.World, mapName, v.Section.MapName,
-		)
+		return err
 	}
 	if err := v.seedMap(ctx, archive); err != nil {
 		return err
 	}
-	if err := v.seedStations(ctx, mapName, p.Stations); err != nil {
+	if err := v.seedStations(ctx, v.Section.MapName, p.Stations); err != nil {
 		return err
 	}
-	return v.localize(ctx, mapName, mapPose(p.Pose, v.Section.OriginOffsetMM))
+	return v.localize(ctx, v.Section.MapName, mapPose(p.Pose, v.Section.OriginOffsetMM))
+}
+
+func (v Vehicle) mapArchive() ([]byte, error) {
+	if v.MapExportPath == "" {
+		return nil, fmt.Errorf("provision %s: vehicle has no vehicles.%s section", v.Robot.Name, Kind)
+	}
+	archive, err := os.ReadFile(v.MapExportPath)
+	if err != nil {
+		return nil, fmt.Errorf("world %s declares map %q but ships no map archive: %w", v.Session.World, v.Section.MapName, err)
+	}
+	mapName, err := worldMapName(archive)
+	if err != nil {
+		return nil, fmt.Errorf("world %s map: %w", v.Session.World, err)
+	}
+	if mapName != v.Section.MapName {
+		return nil, fmt.Errorf(
+			"world %s: map archive holds %q but bundle declares %q", v.Session.World, mapName, v.Section.MapName,
+		)
+	}
+	return archive, nil
 }
 
 // seedMap imports a world map archive into the vehicle's easygo-app.

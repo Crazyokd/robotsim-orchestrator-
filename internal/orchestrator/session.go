@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"git.standard-robots.com/yicao/sim/internal/contract"
 )
 
 // sessionRecord 是一次进行中的会话。容器或状态文件仍是"会话在不在"的真相，
@@ -76,17 +78,36 @@ func loadSessions() ([]sessionRecord, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var file sessionFile
+	var file struct {
+		Sessions []struct {
+			Name        string `json:"name"`
+			WorldKind   string `json:"world_kind"`
+			VehicleKind string `json:"vehicle_kind"`
+			Slot        *int   `json:"slot"`
+			StartedUnix int64  `json:"started_unix"`
+		} `json:"sessions"`
+	}
 	if err := dec.Decode(&file); err != nil {
 		return nil, fmt.Errorf("parse session marker %s: %w", path, err)
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("parse session marker %s: trailing content", path)
 	}
+	if file.Sessions == nil {
+		return nil, fmt.Errorf("session marker %s: sessions must be an array", path)
+	}
 	seen := make(map[string]struct{}, len(file.Sessions))
-	for _, rec := range file.Sessions {
-		if rec.Name == "" || rec.WorldKind == "" || rec.VehicleKind == "" {
-			return nil, fmt.Errorf("session marker %s: name and kinds must not be empty", path)
+	slots := make(map[int]string, len(file.Sessions))
+	records := make([]sessionRecord, 0, len(file.Sessions))
+	for _, entry := range file.Sessions {
+		if entry.Slot == nil {
+			return nil, fmt.Errorf("session marker %s: session %q slot is required", path, entry.Name)
+		}
+		rec := sessionRecord{Name: entry.Name, WorldKind: entry.WorldKind, VehicleKind: entry.VehicleKind, Slot: *entry.Slot, StartedUnix: entry.StartedUnix}
+		for field, value := range map[string]string{"name": rec.Name, "world kind": rec.WorldKind, "vehicle kind": rec.VehicleKind} {
+			if err := contract.ValidateName(field, value); err != nil {
+				return nil, fmt.Errorf("session marker %s: %w", path, err)
+			}
 		}
 		if _, ok := seen[rec.Name]; ok {
 			return nil, fmt.Errorf("session marker %s: duplicate session %q", path, rec.Name)
@@ -95,11 +116,22 @@ func loadSessions() ([]sessionRecord, error) {
 		if rec.Slot < 0 {
 			return nil, fmt.Errorf("session marker %s: session %q slot must be >= 0", path, rec.Name)
 		}
+		if other, ok := slots[rec.Slot]; ok {
+			return nil, fmt.Errorf("session marker %s: sessions %q and %q share slot %d", path, other, rec.Name, rec.Slot)
+		}
+		slots[rec.Slot] = rec.Name
+		if rec.StartedUnix <= 0 {
+			return nil, fmt.Errorf("session marker %s: session %q started_unix must be positive", path, rec.Name)
+		}
+		records = append(records, rec)
 	}
-	return file.Sessions, nil
+	return records, nil
 }
 
 func saveSessions(records []sessionRecord) error {
+	if records == nil {
+		records = []sessionRecord{}
+	}
 	path, err := sessionMarkerPath()
 	if err != nil {
 		return err
@@ -177,7 +209,7 @@ func latestSession(records []sessionRecord) (sessionRecord, bool) {
 	return best, true
 }
 
-// assignSlot 取还没占用的最小非负槽。records 里不应再包含即将替换的同名会话。
+// assignSlot 取还没占用的最小非负槽；同名替换直接保留原槽。
 func assignSlot(records []sessionRecord) int {
 	used := make(map[int]struct{}, len(records))
 	for _, rec := range records {
@@ -216,16 +248,6 @@ func randomSessionName(records []sessionRecord) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("could not pick a free session name")
-}
-
-func exceptSession(records []sessionRecord, name string) []sessionRecord {
-	kept := make([]sessionRecord, 0, len(records))
-	for _, rec := range records {
-		if rec.Name != name {
-			kept = append(kept, rec)
-		}
-	}
-	return kept
 }
 
 // saveSessionMarker 写入或替换一条会话。测试里名字空着时记成 marker。

@@ -17,6 +17,7 @@ import (
 )
 
 type fakeEngine struct {
+	imageErr   error
 	imageFiles map[string]string
 	readPaths  []string
 	started    []docker.ContainerSpec
@@ -53,6 +54,9 @@ func (f *fakeEngine) ReadImageFile(_ context.Context, _, path string) ([]byte, e
 }
 
 func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {
+	if f.imageErr != nil {
+		return "", f.imageErr
+	}
 	return "sha256:" + ref, nil
 }
 
@@ -110,14 +114,14 @@ func testLink(robot contract.Robot) gazebo.Attachment {
 
 func TestNamedSessionShiftsContainerAndPorts(t *testing.T) {
 	vehicle := Vehicle{Robot: contract.Robot{Index: 1, Name: "robot1"}, SessionName: "alpha", Slot: 1}
-	if vehicle.containerName() != "simenv-alpha-robot1" {
+	if vehicle.containerName() != "simenv-vehicle-alpha-robot1" {
 		t.Fatalf("container=%s", vehicle.containerName())
 	}
 	if vehicle.runtime().apiPort == runtimeFor(1, 0).apiPort || vehicle.runtime().rosDomainID == runtimeFor(1, 0).rosDomainID {
 		t.Fatalf("slot 1 reused the default ports: %+v", vehicle.runtime())
 	}
-	if (Vehicle{Robot: contract.Robot{Index: 1, Name: "robot1"}}).containerName() != "simenv-robot1" {
-		t.Fatal("the default session keeps simenv-robotN")
+	if (Vehicle{Robot: contract.Robot{Index: 1, Name: "robot1"}}).containerName() != "simenv-vehicle-robot1" {
+		t.Fatal("the default session keeps simenv-vehicle-robotN")
 	}
 }
 
@@ -302,7 +306,7 @@ func TestVehicleStartConfiguresTheContainer(t *testing.T) {
 		t.Fatalf("started=%d", len(engine.started))
 	}
 	appSpec := engine.started[0]
-	if appSpec.Name != "simenv-robot1" || appSpec.Image != "runtime-sim:tag" {
+	if appSpec.Name != "simenv-vehicle-robot1" || appSpec.Image != "runtime-sim:tag" {
 		t.Fatalf("app spec=%+v", appSpec)
 	}
 	joined := strings.Join(appSpec.Command, " ")
@@ -393,9 +397,9 @@ func TestViewersArePerRobot(t *testing.T) {
 		name        string
 		rviz, gzGui bool
 	}{
-		{"simenv-robot1", true, false},
-		{"simenv-robot2", false, true},
-		{"simenv-robot3", false, false},
+		{"simenv-vehicle-robot1", true, false},
+		{"simenv-vehicle-robot2", false, true},
+		{"simenv-vehicle-robot3", false, false},
 	}
 	for i, want := range cases {
 		spec := engine.started[i]
@@ -661,8 +665,8 @@ func TestWorldHandoverBindUsesAnAbsoluteHostPath(t *testing.T) {
 
 func TestVehicleOnlyManagesItsRobot(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{
-		"simenv-robot1": {Name: "simenv-robot1", Running: true, Image: "runtime-1"},
-		"simenv-robot2": {Name: "simenv-robot2", Running: true, Image: "runtime-2"},
+		"simenv-vehicle-robot1": {Name: "simenv-vehicle-robot1", Running: true, Image: "runtime-1"},
+		"simenv-vehicle-robot2": {Name: "simenv-vehicle-robot2", Running: true, Image: "runtime-2"},
 	}}
 	vehicle := Vehicle{
 		Engine: engine,
@@ -674,7 +678,7 @@ func TestVehicleOnlyManagesItsRobot(t *testing.T) {
 		t.Fatal(err)
 	}
 	var _ orchestrator.VehicleStatus = status // 返回类型由框架接口定义
-	if status.Name != "robot1" || status.Detail["container"] != "simenv-robot1" || status.Detail["image"] != "runtime-1" {
+	if status.Name != "robot1" || status.Detail["container"] != "simenv-vehicle-robot1" || status.Detail["image"] != "runtime-1" {
 		t.Fatalf("status=%+v", status)
 	}
 	if status.Endpoint != "http://127.0.0.1:18189" {
@@ -684,7 +688,7 @@ func TestVehicleOnlyManagesItsRobot(t *testing.T) {
 	if err := vehicle.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(engine.stopped) != 1 || engine.stopped[0] != "simenv-robot1" {
+	if len(engine.stopped) != 1 || engine.stopped[0] != "simenv-vehicle-robot1" {
 		t.Fatalf("stopped=%v", engine.stopped)
 	}
 }
@@ -697,8 +701,8 @@ func TestFactoryDiscoversOnlyRobotContainers(t *testing.T) {
 			Running: true,
 			Labels:  appLabels("robot1", 1),
 		},
-		"simenv-robot02": {
-			Name:    "simenv-robot02",
+		"simenv-vehicle-robot02": {
+			Name:    "simenv-vehicle-robot02",
 			Running: true,
 			Labels: map[string]string{
 				"simenv.managed":     "true",
@@ -707,8 +711,8 @@ func TestFactoryDiscoversOnlyRobotContainers(t *testing.T) {
 				"simenv.robot.index": "2",
 			},
 		},
-		"simenv-robot2-debug": {
-			Name:    "simenv-robot2-debug",
+		"simenv-vehicle-robot2-debug": {
+			Name:    "simenv-vehicle-robot2-debug",
 			Running: true,
 			Labels: map[string]string{
 				"simenv.managed": "true",

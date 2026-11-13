@@ -50,27 +50,37 @@ func (w DockerWorld) rosDomainID() int {
 	return EnvROSDomainID + w.Slot*100
 }
 
-func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSection assets.Section) ([]orchestrator.Attachment, error) {
+func (w DockerWorld) ValidateStart(ctx context.Context, session contract.Session, rawSection assets.Section) error {
 	if err := session.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := w.Options.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if w.Slot < 0 || w.Slot > 2 {
-		return nil, fmt.Errorf("session slot %d exceeds gazebo ROS domain limit 2", w.Slot)
+		return fmt.Errorf("session slot %d exceeds gazebo ROS domain limit 2", w.Slot)
 	}
 	// worlds.gazebo 节严格解析：坏节直接失败。SDF 路径目前仍按目录约定
 	// 解析（世界进程在容器内读），节的运行时消费随世界进程接线演进。
 	if len(rawSection) > 0 {
 		if _, err := ParseSection(rawSection); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	for _, index := range w.Options.CameraRobots {
 		if index < 1 || index > len(session.Robots) {
-			return nil, fmt.Errorf("cameras robot %d outside robot count %d", index, len(session.Robots))
+			return fmt.Errorf("cameras robot %d outside robot count %d", index, len(session.Robots))
 		}
+	}
+	if _, err := w.Engine.ImageID(ctx, w.Options.EnvImage); err != nil {
+		return fmt.Errorf("world image %q: %w", w.Options.EnvImage, err)
+	}
+	return nil
+}
+
+func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSection assets.Section) ([]orchestrator.Attachment, error) {
+	if err := w.ValidateStart(ctx, session, rawSection); err != nil {
+		return nil, err
 	}
 	rawSession, err := json.Marshal(session)
 	if err != nil {

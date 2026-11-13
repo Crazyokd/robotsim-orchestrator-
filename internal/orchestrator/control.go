@@ -34,6 +34,9 @@ func (o Orchestrator) Reset(ctx context.Context, robot int, pose contract.Pose) 
 
 // ResetSession 把摆位路由到指名会话。名字空着时用最近启动的那一个。
 func (o Orchestrator) ResetSession(ctx context.Context, name string, robot int, pose contract.Pose) (EntityPose, error) {
+	if err := pose.Validate(); err != nil {
+		return EntityPose{}, err
+	}
 	worldPort, err := o.markedWorldNamed(name)
 	if err != nil {
 		return EntityPose{}, err

@@ -16,6 +16,7 @@ const (
 	httpBaseFrontend = 18088
 	httpBaseAPI      = 18089
 	httpBaseVoice    = 18091
+	paramHTTPBase    = 8082
 	httpStride       = 100
 	mqttBase         = 1883
 	observeBase      = 8090
@@ -52,6 +53,7 @@ const (
 type vehicleRuntime struct {
 	frontendPort       int
 	apiPort            int
+	paramHTTPPort      int
 	voicePort          int
 	mqttPort           int
 	observePort        int
@@ -73,6 +75,7 @@ func runtimeFor(index, slot int) vehicleRuntime {
 	rt := vehicleRuntime{
 		frontendPort:       httpBaseFrontend + index*httpStride,
 		apiPort:            httpBaseAPI + index*httpStride,
+		paramHTTPPort:      paramHTTPBase + index*httpStride,
 		voicePort:          httpBaseVoice + index*httpStride,
 		mqttPort:           mqttBase + index,
 		observePort:        observeBase + index*httpStride,
@@ -94,6 +97,7 @@ func runtimeFor(index, slot int) vehicleRuntime {
 		shift := slot * 10000
 		rt.frontendPort += shift
 		rt.apiPort += shift
+		rt.paramHTTPPort += shift
 		rt.voicePort += shift
 		rt.mqttPort += slot * 100
 		rt.observePort += shift

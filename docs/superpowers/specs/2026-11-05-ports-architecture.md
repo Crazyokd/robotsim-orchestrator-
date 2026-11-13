@@ -90,6 +90,7 @@ type Attachment interface{ Kind() string }   // 世界 Port 产出，框架只�
 
 type WorldPort interface {
     Kind() string                                    // bundle worlds.<kind> 节与会话标记按它路由
+    ValidateStart(ctx, contract.Session, assets.Section) error // 替换旧会话前校验
     Start(ctx, contract.Session, assets.Section) ([]Attachment, error)   // 每车一个 Attachment；节即 worlds.<kind>
     Ready(ctx, contract.Session) (WorldReady, error)
     Status(ctx) (WorldStatus, error)
@@ -103,6 +104,7 @@ type EntityPose  struct{ Robot int; Entity string; Pose contract.Pose }   // 世
 
 type VehicleFactory interface {
     Kind() string                                  // bundle vehicles.<kind> 节按它取
+    ValidateStart(ctx, contract.Session, assets.Section) error
     New(ctx, contract.Session, contract.Robot, Attachment, assets.Section) (VehiclePort, error)
     Discover(ctx) ([]VehiclePort, error)
 }
@@ -127,6 +129,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 - 控制面只路由不解析：`pose` / `reset` 的世界系位姿交给 `WorldPort`；`call --robot` 的字节交给该车的 `Forward`。怎么 dial、什么协议是车端 Port 自己的事。
 - `StartConfig` 只剩 `World / Robots / Poses / WorldKind / VehicleKind`；`--poses` 与 bundle `initial_poses` 同给时报错。
 - 两个种类的节（`worlds.<kind>` / `vehicles.<kind>`）在碰任何运行态之前取好：缺节即失败，且不先杀掉旧会话。
+- 两个 Port 必须实现 `ValidateStart`，由编排在停止旧会话前调用；实现负责校验自己的选项、资产、资源范围和镜像。校验不启动业务进程、不改写车辆数据。配对所需的运行期 Attachment 仍由世界启动后提供。
 - **发现路径零参数**：`Status` / `Stop` / `Discover` / `Pose` / `Reset` / `Forward` 拿不到 start 的参数，Port 的发现与停止不得在运行期依赖 start-time Options（null 对因此零参数，§12）。
 
 ## 7. 配对：Attachment 是显式的
@@ -211,3 +214,10 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 bundle 只为它声明的种类供节。nullworld 只有 `worlds.null` / `vehicles.null`，不应被迫长出假 gazebo/easygo 节。资产一致性测试相应改为：无本 kind 节即跳过，但至少一个世界必须服务本 kind。
 
 明确不做的：不给容器打 kind 标签做「第三种 docker 实现」的自动识别——世界种类从会话标记来，不从 Docker 状态推导。
+
+### 12.4 多会话生命周期（2026-11-13）
+
+- 同名替换保留原 slot，新名字才领取空闲 slot。`start` / `stop` 在同一份名单上使用进程锁；冲突立即报忙，查询不取此锁。
+- Port 预检通过、旧会话停止后，在启动世界之前写入名字、种类、slot 和启动时间。随后任一步失败都回滚：清理完全成功才删除记录，清理失败保留记录和 slot，允许点名 `stop` 重试；进程意外退出也保留恢复入口。
+- 名单严格校验必填字段、名称、时间和 slot 唯一性。`status` 收集所有会话的结果和具名错误；一路失败不隐藏其他会话，同时保留失败退出码。
+- EasyGo 的三路资源、每路十车监听端口和 display 由 Port 计算；参数 HTTP 端口也显式传给 launch。同名数据归会话所有，已有参数库的 sync 端口绑定不同 slot 时预检失败，避免将旧值当作新模板已生效。

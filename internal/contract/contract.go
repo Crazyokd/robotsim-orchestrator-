@@ -2,6 +2,7 @@ package contract
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -16,6 +17,15 @@ type Pose struct {
 	Y   float64 `json:"y"`
 	Z   float64 `json:"z"`
 	Yaw float64 `json:"yaw"`
+}
+
+func (p Pose) Validate() error {
+	for name, value := range map[string]float64{"x": p.X, "y": p.Y, "z": p.Z, "yaw": p.Yaw} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("pose %s must be finite", name)
+		}
+	}
+	return nil
 }
 
 // Session 是编排框架与世界进程之间的线上契约：只有世界名与机器人清单。
@@ -55,6 +65,9 @@ func RobotName(index int) string {
 }
 
 func NewRobot(index int, pose Pose) (Robot, error) {
+	if err := pose.Validate(); err != nil {
+		return Robot{}, err
+	}
 	if index < 1 {
 		return Robot{}, fmt.Errorf("robot index must be >= 1")
 	}
@@ -69,8 +82,8 @@ func NewRobot(index int, pose Pose) (Robot, error) {
 }
 
 func (c StartConfig) Validate() error {
-	if strings.TrimSpace(c.World) == "" {
-		return fmt.Errorf("world must not be empty")
+	if err := ValidateName("world", c.World); err != nil {
+		return err
 	}
 	if c.Robots < 1 {
 		return fmt.Errorf("robots must be >= 1")
@@ -78,18 +91,23 @@ func (c StartConfig) Validate() error {
 	if len(c.Poses) > 0 && len(c.Poses) != c.Robots {
 		return fmt.Errorf("poses count %d does not match robots %d", len(c.Poses), c.Robots)
 	}
+	for _, pose := range c.Poses {
+		if err := pose.Validate(); err != nil {
+			return err
+		}
+	}
 	if c.WorldKind != "" {
-		if err := validateSafeToken("world kind", c.WorldKind); err != nil {
+		if err := ValidateName("world kind", c.WorldKind); err != nil {
 			return err
 		}
 	}
 	if c.VehicleKind != "" {
-		if err := validateSafeToken("vehicle kind", c.VehicleKind); err != nil {
+		if err := ValidateName("vehicle kind", c.VehicleKind); err != nil {
 			return err
 		}
 	}
 	if c.SessionName != "" {
-		if err := validateSafeToken("session", c.SessionName); err != nil {
+		if err := ValidateName("session", c.SessionName); err != nil {
 			return err
 		}
 	}
@@ -151,7 +169,7 @@ func (s Session) Validate() error {
 	if strings.TrimSpace(s.World) == "" {
 		return fmt.Errorf("session world must not be empty")
 	}
-	if err := validateSafeToken("session world", s.World); err != nil {
+	if err := ValidateName("session world", s.World); err != nil {
 		return err
 	}
 	if len(s.Robots) < 1 {
@@ -160,6 +178,9 @@ func (s Session) Validate() error {
 	indices := make(map[int]struct{}, len(s.Robots))
 	names := make(map[string]struct{}, len(s.Robots))
 	for _, robot := range s.Robots {
+		if err := robot.Pose.Validate(); err != nil {
+			return err
+		}
 		if robot.Index < 1 {
 			return fmt.Errorf("robot index must be >= 1")
 		}
@@ -167,7 +188,7 @@ func (s Session) Validate() error {
 			return fmt.Errorf("duplicate robot index %d", robot.Index)
 		}
 		indices[robot.Index] = struct{}{}
-		if err := validateSafeToken("robot name", robot.Name); err != nil {
+		if err := ValidateName("robot name", robot.Name); err != nil {
 			return err
 		}
 		if _, ok := names[robot.Name]; ok {
@@ -178,9 +199,13 @@ func (s Session) Validate() error {
 	return nil
 }
 
-func validateSafeToken(field, value string) error {
+// ValidateName validates a name used in session routing and storage paths.
+func ValidateName(field, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s must not be empty", field)
+	}
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%s must not begin with '-'", field)
 	}
 	for _, r := range value {
 		if isSafeTokenChar(r) {

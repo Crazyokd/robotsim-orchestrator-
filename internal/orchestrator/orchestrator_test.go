@@ -19,6 +19,8 @@ type testAttachment struct{ prefix string }
 func (testAttachment) Kind() string { return "test" }
 
 type fakeWorldPort struct {
+	validateErr error
+	onStart     func()
 	started     []contract.Session
 	stopped     bool
 	startErr    error
@@ -28,9 +30,16 @@ type fakeWorldPort struct {
 	sections    []assets.Section
 }
 
+func (f *fakeWorldPort) ValidateStart(context.Context, contract.Session, assets.Section) error {
+	return f.validateErr
+}
+
 func (f *fakeWorldPort) Kind() string { return "fake-world" }
 
 func (f *fakeWorldPort) Start(_ context.Context, session contract.Session, section assets.Section) ([]Attachment, error) {
+	if f.onStart != nil {
+		f.onStart()
+	}
 	f.started = append(f.started, session)
 	f.sections = append(f.sections, section)
 	if f.startErr != nil {
@@ -135,6 +144,7 @@ func (f *fakeVehiclePort) Forward(ctx context.Context, request []byte) ([]byte, 
 }
 
 type fakeVehicleFactory struct {
+	validateErr   error
 	ports         []*fakeVehiclePort
 	discovered    []*fakeVehiclePort // 非空时 Discover 返回它们：预置的残留会话
 	failRobot     string
@@ -143,6 +153,10 @@ type fakeVehicleFactory struct {
 	stopOrder     []string
 	discoverErr   error
 	sections      []assets.Section
+}
+
+func (f *fakeVehicleFactory) ValidateStart(context.Context, contract.Session, assets.Section) error {
+	return f.validateErr
 }
 
 func (f *fakeVehicleFactory) Kind() string { return "fake" }

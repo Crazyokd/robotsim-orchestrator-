@@ -23,6 +23,7 @@ func launchArgs(robot contract.Robot, topicPrefix string, runtime vehicleRuntime
 		"map_path:=" + runtime.runtimeRoot + "/map/",
 		fmt.Sprintf("frontend_port:=%d", runtime.frontendPort),
 		fmt.Sprintf("api_port:=%d", runtime.apiPort),
+		fmt.Sprintf("param_http_port:=%d", runtime.paramHTTPPort),
 		fmt.Sprintf("voice_port:=%d", runtime.voicePort),
 		fmt.Sprintf("mqtt_port:=%d", runtime.mqttPort),
 		fmt.Sprintf("slam_web_port:=%d", runtime.slamWebPort),

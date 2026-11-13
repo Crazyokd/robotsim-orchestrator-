@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"strings"
@@ -13,8 +14,10 @@ import (
 )
 
 type fakeOrch struct {
-	started contract.StartConfig
-	status  orchestrator.Status
+	started    contract.StartConfig
+	status     orchestrator.Status
+	sessions   []orchestrator.SessionSummary
+	sessionErr error
 }
 
 func (f *fakeOrch) Start(_ context.Context, cfg contract.StartConfig) (orchestrator.Status, error) {
@@ -41,7 +44,23 @@ func (f *fakeOrch) StatusSession(context.Context, string) (orchestrator.Status, 
 }
 
 func (f *fakeOrch) Sessions(context.Context) ([]orchestrator.SessionSummary, error) {
-	return nil, nil
+	return f.sessions, f.sessionErr
+}
+
+func TestStatusPrintsAllSessionsAndReturnsQueryErrors(t *testing.T) {
+	wantErr := errors.New("session broken: query failed")
+	orch := &fakeOrch{
+		sessions: []orchestrator.SessionSummary{
+			{Name: "broken", Error: "query failed"},
+			{Name: "healthy", Connected: true},
+		},
+		sessionErr: wantErr,
+	}
+	var out bytes.Buffer
+	err := Run([]string{"status"}, bytes.NewReader(nil), &out, &bytes.Buffer{}, orch)
+	if !errors.Is(err, wantErr) || !strings.Contains(out.String(), "session healthy") || !strings.Contains(out.String(), `error="query failed"`) {
+		t.Fatalf("partial status=%q, error=%v", out.String(), err)
+	}
 }
 
 func (f *fakeOrch) PoseSession(_ context.Context, _ string, robot int) (orchestrator.EntityPose, error) {
@@ -172,5 +191,18 @@ func TestCallRejectsFlagsAndAnEmptyRequest(t *testing.T) {
 	}
 	if err := Run([]string{"call", "--robot", "1"}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{}, &fakeOrch{}); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestCoordinatesRejectNonFiniteAndTrailingText(t *testing.T) {
+	for _, text := range []string{"NaN,0,0", "+Inf,0,0", "1,2,3junk", "1,2,3,4,5"} {
+		if _, err := parsePoses(text); err == nil {
+			t.Errorf("poses accepted %q", text)
+		}
+	}
+	for _, x := range []string{"NaN", "+Inf", "1junk"} {
+		if _, _, _, err := parseReset([]string{"alpha", "--robot", "1", "--x", x, "--y", "0", "--yaw", "0"}); err == nil {
+			t.Errorf("reset accepted %q", x)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package easygo
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,6 +9,32 @@ import (
 	"strconv"
 	"strings"
 )
+
+// Existing values survive registry seeding, so a saved database cannot change slots.
+func (v Vehicle) validateStoredSyncConfig() error {
+	root, err := v.dataPath()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(root, "db", "cfg.db3")); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	path := filepath.Join(root, appConfigHostDir, filepath.Base(syncRegistry))
+	registry, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("cannot verify saved sync configuration %s: %w", path, err)
+	}
+	patched, err := patchRegistryDefault(registry, syncMembershipPortKey, strconv.Itoa(v.runtime().syncMembershipPort))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(registry, patched) {
+		return fmt.Errorf("saved parameter data %s belongs to another slot; use a new session name or data root", root)
+	}
+	return nil
+}
 
 const (
 	// appRegistryDir is where the runtime image keeps the parameter registry
@@ -25,67 +52,34 @@ const (
 	syncMembershipPortKey = "sync.membership_port"
 )
 
-// initializeSyncConfig pins this robot's sync membership port and returns the
-// mount that puts it in place. Vehicle identity is supplied by the launch's
-// serial_number argument, so simenv does not rewrite its parameter registry.
-//
-// The image already ships the default, so initialization reads that registry,
-// patches the per-robot port, and mounts the result back over the image file.
+// readSyncConfig validates the image registry and applies the per-robot port in memory.
+func (v Vehicle) readSyncConfig(ctx context.Context, runtimeImage string) ([]byte, error) {
+	registry, err := v.Engine.ReadImageFile(ctx, runtimeImage, appRegistryDir+"/"+syncRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("read %s from %s: %w", syncRegistry, runtimeImage, err)
+	}
+	patched, err := patchRegistryDefault(registry, syncMembershipPortKey, strconv.Itoa(v.runtime().syncMembershipPort))
+	if err != nil {
+		return nil, fmt.Errorf("initialize sync config for %s: %w", v.Robot.Name, err)
+	}
+	return patched, nil
+}
+
+// initializeSyncConfig stages only the sync port; launch owns vehicle identity.
 func (v Vehicle) initializeSyncConfig(ctx context.Context, runtimeImage, hostSros string) ([]string, error) {
-	overrides := v.initialRegistryDefaults()
-	hostDir := filepath.Join(hostSros, appConfigHostDir)
-	if err := os.RemoveAll(hostDir); err != nil {
+	patched, err := v.readSyncConfig(ctx, runtimeImage)
+	if err != nil {
 		return nil, err
 	}
+	hostDir := filepath.Join(hostSros, appConfigHostDir)
 	if err := os.MkdirAll(hostDir, 0o755); err != nil {
 		return nil, err
 	}
-	staged := make(map[string]string, len(overrides))
-	binds := make([]string, 0, len(overrides))
-	for _, override := range overrides {
-		name := filepath.Base(override.Registry)
-		if other, clash := staged[name]; clash {
-			return nil, fmt.Errorf("registry overrides %s and %s stage the same file name", other, override.Registry)
-		}
-		staged[name] = override.Registry
-
-		registry, err := v.Engine.ReadImageFile(ctx, runtimeImage, appRegistryDir+"/"+override.Registry)
-		if err != nil {
-			return nil, fmt.Errorf("read %s from %s: %w", override.Registry, runtimeImage, err)
-		}
-		patched, err := patchRegistryDefault(registry, override.Key, override.Value)
-		if err != nil {
-			return nil, fmt.Errorf("initialize sync config for %s: %w", v.Robot.Name, err)
-		}
-		hostPath := filepath.Join(hostDir, name)
-		if err := os.WriteFile(hostPath, patched, 0o644); err != nil {
-			return nil, fmt.Errorf("initialize sync config for %s: %w", v.Robot.Name, err)
-		}
-		binds = append(binds, hostPath+":"+appRegistryDir+"/"+override.Registry)
+	hostPath := filepath.Join(hostDir, filepath.Base(syncRegistry))
+	if err := os.WriteFile(hostPath, patched, 0o644); err != nil {
+		return nil, fmt.Errorf("initialize sync config for %s: %w", v.Robot.Name, err)
 	}
-	return binds, nil
-}
-
-// initialRegistryDefaults lists the registry defaults simenv must pin per robot.
-func (v Vehicle) initialRegistryDefaults() []registryOverride {
-	return []registryOverride{
-		// A UDP bind for the sync service's cluster-gossip discovery. Vehicles
-		// sharing one host network would otherwise collide and easygo-app would
-		// abort at startup.
-		{
-			Registry: syncRegistry,
-			Key:      syncMembershipPortKey,
-			Value:    strconv.Itoa(v.runtime().syncMembershipPort),
-		},
-	}
-}
-
-type registryOverride struct {
-	// Registry is the registry file relative to appRegistryDir.
-	Registry string
-	Key      string
-	// Value is YAML scalar text, already quoted if the scalar needs quoting.
-	Value string
+	return []string{hostPath + ":" + appRegistryDir + "/" + syncRegistry}, nil
 }
 
 // patchRegistryDefault rewrites default_value on one registry entry, preserving

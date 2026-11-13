@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,11 +56,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, runner Runner
 		}
 		if session == "" {
 			sessions, err := runner.Sessions(context.Background())
-			if err != nil {
-				return err
-			}
 			printSessions(stdout, sessions)
-			return nil
+			return err
 		}
 		status, err := runner.StatusSession(context.Background(), session)
 		if err != nil {
@@ -178,19 +176,23 @@ func parsePoses(text string) ([]contract.Pose, error) {
 			continue
 		}
 		fields := strings.Split(part, ",")
-		if len(fields) < 3 {
+		if len(fields) < 3 || len(fields) > 4 {
 			return nil, fmt.Errorf("pose %q must be x,y,yaw[,z]", part)
 		}
-		var pose contract.Pose
-		if _, err := fmt.Sscanf(strings.Join(fields, " "), "%f %f %f", &pose.X, &pose.Y, &pose.Yaw); err != nil {
-			return nil, fmt.Errorf("pose %q: %w", part, err)
-		}
-		if len(fields) >= 4 {
-			if _, err := fmt.Sscanf(fields[3], "%f", &pose.Z); err != nil {
-				return nil, err
+		values := make([]float64, len(fields))
+		for i, field := range fields {
+			value, err := strconv.ParseFloat(strings.TrimSpace(field), 64)
+			if err != nil {
+				return nil, fmt.Errorf("pose %q: %w", part, err)
 			}
-		} else {
-			pose.Z = contract.DefaultSpawnZ
+			values[i] = value
+		}
+		pose := contract.Pose{X: values[0], Y: values[1], Yaw: values[2], Z: contract.DefaultSpawnZ}
+		if len(values) == 4 {
+			pose.Z = values[3]
+		}
+		if err := pose.Validate(); err != nil {
+			return nil, err
 		}
 		poses = append(poses, pose)
 	}
@@ -201,15 +203,9 @@ func parseRobotOnly(args []string) (string, int, error) {
 	fs := flag.NewFlagSet("pose", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	robot := fs.Int("robot", 0, "")
-	if err := fs.Parse(args); err != nil {
+	sessionName, err := parseControlFlags(fs, args)
+	if err != nil {
 		return "", 0, err
-	}
-	if fs.NArg() > 1 {
-		return "", 0, fmt.Errorf("pose accepts at most one session name")
-	}
-	sessionName := ""
-	if fs.NArg() == 1 {
-		sessionName = fs.Arg(0)
 	}
 	if *robot < 1 {
 		return "", 0, fmt.Errorf("robot must be >= 1")
@@ -226,32 +222,30 @@ func parseReset(args []string) (string, int, contract.Pose, error) {
 	z = contract.DefaultSpawnZ
 	fs.Func("x", "", func(value string) error {
 		xSet = true
-		_, err := fmt.Sscanf(value, "%f", &x)
+		var err error
+		x, err = strconv.ParseFloat(value, 64)
 		return err
 	})
 	fs.Func("y", "", func(value string) error {
 		ySet = true
-		_, err := fmt.Sscanf(value, "%f", &y)
+		var err error
+		y, err = strconv.ParseFloat(value, 64)
 		return err
 	})
 	fs.Func("yaw", "", func(value string) error {
 		yawSet = true
-		_, err := fmt.Sscanf(value, "%f", &yaw)
+		var err error
+		yaw, err = strconv.ParseFloat(value, 64)
 		return err
 	})
 	fs.Func("z", "", func(value string) error {
-		_, err := fmt.Sscanf(value, "%f", &z)
+		var err error
+		z, err = strconv.ParseFloat(value, 64)
 		return err
 	})
-	if err := fs.Parse(args); err != nil {
+	sessionName, err := parseControlFlags(fs, args)
+	if err != nil {
 		return "", 0, contract.Pose{}, err
-	}
-	if fs.NArg() > 1 {
-		return "", 0, contract.Pose{}, fmt.Errorf("reset accepts at most one session name")
-	}
-	sessionName := ""
-	if fs.NArg() == 1 {
-		sessionName = fs.Arg(0)
 	}
 	if *robot < 1 {
 		return "", 0, contract.Pose{}, fmt.Errorf("robot must be >= 1")
@@ -259,13 +253,21 @@ func parseReset(args []string) (string, int, contract.Pose, error) {
 	if !xSet || !ySet || !yawSet {
 		return "", 0, contract.Pose{}, fmt.Errorf("reset requires --x --y --yaw")
 	}
-	return sessionName, *robot, contract.Pose{X: x, Y: y, Z: z, Yaw: yaw}, nil
+	pose := contract.Pose{X: x, Y: y, Z: z, Yaw: yaw}
+	if err := pose.Validate(); err != nil {
+		return "", 0, contract.Pose{}, err
+	}
+	return sessionName, *robot, pose, nil
 }
 
 func printSessions(w io.Writer, sessions []orchestrator.SessionSummary) {
 	for _, session := range sessions {
-		fmt.Fprintf(w, "session %s world=%s vehicle=%s connected=%t\n",
+		fmt.Fprintf(w, "session %s world=%s vehicle=%s connected=%t",
 			session.Name, session.WorldKind, session.VehicleKind, session.Connected)
+		if session.Error != "" {
+			fmt.Fprintf(w, " error=%q", session.Error)
+		}
+		fmt.Fprintln(w)
 	}
 }
 
@@ -310,18 +312,29 @@ func parseCall(args []string) (string, int, error) {
 	fs := flag.NewFlagSet("call", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	robot := fs.Int("robot", 0, "")
-	if err := fs.Parse(args); err != nil {
+	sessionName, err := parseControlFlags(fs, args)
+	if err != nil {
 		return "", 0, err
 	}
 	if *robot < 1 {
 		return "", 0, fmt.Errorf("robot must be >= 1")
 	}
-	if fs.NArg() > 1 {
-		return "", 0, fmt.Errorf("call accepts at most one session name")
-	}
-	sessionName := ""
-	if fs.NArg() == 1 {
-		sessionName = fs.Arg(0)
-	}
 	return sessionName, *robot, nil
+}
+
+func parseControlFlags(fs *flag.FlagSet, args []string) (string, error) {
+	name := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name, args = args[0], args[1:]
+		if err := contract.ValidateName("session", name); err != nil {
+			return "", err
+		}
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 0 {
+		return "", fmt.Errorf("%s requires the session name before flags", fs.Name())
+	}
+	return name, nil
 }

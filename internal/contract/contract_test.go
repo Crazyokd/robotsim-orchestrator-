@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -114,21 +115,18 @@ func TestSessionJSONCarriesOnlyWorldAndRobots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(raw)
-	for _, field := range []string{
-		"Partition",
-		"TopicPrefix",
-		"APIPort",
-		"FrontendPort",
-		"VoicePort",
-		"MQTTPort",
-		"ROSDomainID",
-		"RuntimeRoot",
-	} {
-		if strings.Contains(body, field) {
-			t.Fatalf("session JSON leaked %s: %s", field, body)
-		}
+	var got, want any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
 	}
+	expected := `{"world":"simple","robots":[{"index":1,"name":"robot1","pose":{"x":0,"y":0,"z":0.05,"yaw":0}},{"index":2,"name":"robot2","pose":{"x":3,"y":0,"z":0.05,"yaw":0}}]}`
+	if err := json.Unmarshal([]byte(expected), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("session wire format=%s, want %s", raw, expected)
+	}
+
 }
 
 func TestCameraSelectionStaysOutsideSession(t *testing.T) {

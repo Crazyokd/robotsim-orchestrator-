@@ -53,6 +53,17 @@ func (w World) statePath() (string, error) {
 	return filepath.Join(root, stateFileName), nil
 }
 
+func (World) ValidateStart(_ context.Context, session contract.Session, rawSection assets.Section) error {
+	if err := session.Validate(); err != nil {
+		return err
+	}
+	if len(rawSection) > 0 {
+		_, err := ParseSection(rawSection)
+		return err
+	}
+	return nil
+}
+
 func (w World) Start(_ context.Context, session contract.Session, rawSection assets.Section) ([]orchestrator.Attachment, error) {
 	if err := session.Validate(); err != nil {
 		return nil, err

@@ -48,6 +48,8 @@ type WorldStatus struct {
 type WorldPort interface {
 	// Kind 是世界种类：bundle 按它取 worlds.<kind> 节，会话标记按它路由。
 	Kind() string
+	// ValidateStart rejects invalid input before any running session is replaced.
+	ValidateStart(ctx context.Context, session contract.Session, section assets.Section) error
 	// Start 拉起世界，并返回每台车的挂接信息（与 session.Robots 等长同序）。
 	// section 是 bundle 里该世界种类的原始节（裸世界为 nil），认不出就报错。
 	Start(ctx context.Context, session contract.Session, section assets.Section) ([]Attachment, error)
@@ -82,6 +84,7 @@ type VehiclePort interface {
 type VehiclePortFactory interface {
 	// Kind 是车端种类：bundle 按它取 vehicles.<kind> 节交给 New；缺节即失败。
 	Kind() string
+	ValidateStart(ctx context.Context, session contract.Session, section assets.Section) error
 	// New 造一台车的 Port；attachment 是世界给的挂接信息，section 是 bundle 里
 	// 该车端种类的原始节（裸世界为 nil），认不出任一者就报错。
 	New(ctx context.Context, session contract.Session, robot contract.Robot, attachment Attachment, section assets.Section) (VehiclePort, error)
@@ -116,6 +119,9 @@ func (o Orchestrator) assetsPath() string {
 }
 
 func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Status, error) {
+	if err := ctx.Err(); err != nil {
+		return Status{}, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return Status{}, err
 	}
@@ -148,8 +154,11 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 				return Status{}, err
 			}
 		}
-		// 同名会话会被这次启动替换，槽位按替换之后的名单分配，好让它沿用自己的槽。
-		cfg.Slot = assignSlot(exceptSession(records, cfg.SessionName))
+		if previous, ok := findSession(records, cfg.SessionName); ok {
+			cfg.Slot = previous.Slot
+		} else {
+			cfg.Slot = assignSlot(records)
+		}
 	} else if cfg.SessionName == "" {
 		cfg.SessionName, err = randomSessionName(nil)
 		if err != nil {
@@ -179,6 +188,15 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 			return Status{}, err
 		}
 	}
+	if err := worldPort.ValidateStart(ctx, session, worldSection); err != nil {
+		return Status{}, err
+	}
+	if err := vehicleFactory.ValidateStart(ctx, session, vehicleSection); err != nil {
+		return Status{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Status{}, err
+	}
 	// 同名会话先停掉再开，其它名字留着。注入路径（测试）停掉工厂发现的全部车。
 	if o.usingRegistry() {
 		records, err := loadSessions()
@@ -200,13 +218,26 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		}
 	}
 	vehiclePorts := make([]VehiclePort, 0, len(session.Robots))
+	registered := false
 	rollback := func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		var cleanupErr error
 		cleanupErr = errors.Join(cleanupErr, stopVehiclePorts(cleanupCtx, vehiclePorts))
 		cleanupErr = errors.Join(cleanupErr, worldPort.Stop(cleanupCtx))
+		if registered && cleanupErr == nil {
+			cleanupErr = deleteSession(cfg.SessionName)
+		}
 		return cleanupErr
+	}
+	if o.usingRegistry() {
+		if err := upsertSession(sessionRecord{
+			Name: cfg.SessionName, WorldKind: worldPort.Kind(), VehicleKind: vehicleFactory.Kind(),
+			Slot: cfg.Slot, StartedUnix: time.Now().UnixNano(),
+		}); err != nil {
+			return Status{}, err
+		}
+		registered = true
 	}
 	attachments, err := worldPort.Start(ctx, session, worldSection)
 	if err != nil {
@@ -222,6 +253,9 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		return Status{}, errors.Join(err, rollback())
 	}
 	for i, robot := range session.Robots {
+		if err := ctx.Err(); err != nil {
+			return Status{}, errors.Join(err, rollback())
+		}
 		vehiclePort, err := vehicleFactory.New(ctx, session, robot, attachments[i], vehicleSection)
 		if err != nil {
 			return Status{}, errors.Join(err, rollback())
@@ -242,16 +276,8 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if err != nil {
 		return Status{}, errors.Join(err, rollback())
 	}
-	if o.usingRegistry() {
-		if err := upsertSession(sessionRecord{
-			Name:        cfg.SessionName,
-			WorldKind:   worldPort.Kind(),
-			VehicleKind: vehicleFactory.Kind(),
-			Slot:        cfg.Slot,
-			StartedUnix: time.Now().UnixNano(),
-		}); err != nil {
-			return Status{}, errors.Join(err, rollback())
-		}
+	if !status.Connected {
+		return Status{}, errors.Join(fmt.Errorf("session %q lost readiness during start", cfg.SessionName), rollback())
 	}
 	status.Name = cfg.SessionName
 	return status, nil
@@ -333,6 +359,7 @@ type SessionSummary struct {
 	WorldKind   string
 	VehicleKind string
 	Connected   bool
+	Error       string
 }
 
 // Sessions 列出全部进行中的会话。注入路径没有名单，按当前这一次端口报告一行。
@@ -355,19 +382,22 @@ func (o Orchestrator) Sessions(ctx context.Context) ([]SessionSummary, error) {
 		return nil, err
 	}
 	summaries := make([]SessionSummary, 0, len(records))
+	var queryErr error
 	for _, rec := range records {
 		status, err := o.statusRecord(ctx, rec)
-		if err != nil {
-			return nil, err
-		}
-		summaries = append(summaries, SessionSummary{
+		summary := SessionSummary{
 			Name:        rec.Name,
 			WorldKind:   rec.WorldKind,
 			VehicleKind: rec.VehicleKind,
 			Connected:   status.Connected,
-		})
+		}
+		if err != nil {
+			summary.Error = err.Error()
+			queryErr = errors.Join(queryErr, fmt.Errorf("session %q: %w", rec.Name, err))
+		}
+		summaries = append(summaries, summary)
 	}
-	return summaries, nil
+	return summaries, queryErr
 }
 
 // StatusSession 报告指名会话的详情。名字空着时用最近启动的那一个；

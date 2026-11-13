@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"git.standard-robots.com/yicao/sim/internal/contract"
 )
 
 // Options 是 EasyGo 车端 Port 的启动参数；组合根把它挂到 start 的 FlagSet。
@@ -78,6 +80,37 @@ func (r *robotIndices) Set(text string) error {
 			return fmt.Errorf("robot %q is not a positive index", part)
 		}
 		*r = append(*r, index)
+	}
+	return nil
+}
+
+func (o Options) validateStart(session contract.Session, slot int) error {
+	if err := session.Validate(); err != nil {
+		return err
+	}
+	if err := o.Validate(); err != nil {
+		return err
+	}
+	if slot < 0 || slot > maxSessionSlot {
+		return fmt.Errorf("session slot %d exceeds easygo resource limit %d", slot, maxSessionSlot)
+	}
+	for _, robot := range session.Robots {
+		if robot.Index > maxRobotIndexPerSlot {
+			return fmt.Errorf("robot index %d exceeds easygo resource block limit %d", robot.Index, maxRobotIndexPerSlot)
+		}
+	}
+	if strings.TrimSpace(o.DataVolumePrefix) != "" && (len(session.Robots) != 1 || slot != 0) {
+		return fmt.Errorf("data-volume-prefix requires exactly one robot in slot 0; per-robot sync registry binds are unavailable")
+	}
+	for _, index := range o.RvizRobots {
+		if index < 1 || index > len(session.Robots) {
+			return fmt.Errorf("rviz robot %d outside robot count %d", index, len(session.Robots))
+		}
+	}
+	for _, index := range o.GzGuiRobots {
+		if index < 1 || index > len(session.Robots) {
+			return fmt.Errorf("gz-gui robot %d outside robot count %d", index, len(session.Robots))
+		}
 	}
 	return nil
 }
