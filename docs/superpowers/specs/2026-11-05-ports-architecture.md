@@ -227,6 +227,6 @@ bundle 只为它声明的种类供节。nullworld 只有 `worlds.null` / `vehicl
 - `worlds.gazebo.sdf` 为世界 bundle 内的相对路径，必须留在该目录内；Gazebo Port 从所选环境镜像的 `/opt/simenv` 读取资产归档，在启动前检查声明文件和 XML。裸世界使用本 Port 的 `gazebo/world.sdf` 目录约定。
 - 世界进程只接收显式 `--world-sdf` 路径，不再重新拼接 `gazebo/world.sdf`。修改世界和模型后须重建环境镜像。
 - Attachment 的 `WorldAssets()` 返回车端复制目标目录、SDF 绝对路径及资产 tar。框架原样转交；EasyGo Port 通过 Docker API 在进程启动前复制资产，向当前 runtime-sim 传入显式 `world:=<path>` 和 `EASYGO_SIM_WORLD=<path>`。
-- SDF、模型和相对引用保持与环境镜像相同的容器内路径。删除世界 SDF handover 和 GUI 的宿主 bind；named-volume 模式也接收同一份世界资产，sync 参数的单车 slot 0 限制独立保留。
+- SDF、模型和相对引用保持与环境镜像相同的容器内路径。删除世界 SDF handover 和 GUI 的宿主 bind；named-volume 模式也接收同一份世界资产，并通过 archive 注入 per-robot sync registry，支持多车和非零 slot。slot 写入卷名，避免持久参数库跨 slot 复用。
 - 资产归档只接受 `simenv/` 树内的普通文件与目录；链接和特殊文件直接失败。SDF 必须为完整 XML 且恰好包含一个命名世界。
 - 资产复制失败时不启动进程，清理未启动的容器并保留原始/清理错误；镜像资产读取的临时容器清理错误也必须返回。

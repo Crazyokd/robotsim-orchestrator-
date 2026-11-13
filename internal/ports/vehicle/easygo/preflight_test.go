@@ -9,12 +9,13 @@ import (
 	"strings"
 	"testing"
 
+	"git.standard-robots.com/yicao/sim/internal/contract"
 	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
 	"git.standard-robots.com/yicao/sim/internal/ports/world/gazebo"
 )
 
 func TestPreflightRejectsInvalidVehicleInputsWithoutStarting(t *testing.T) {
-	for _, mode := range []string{"image", "registry", "viewer", "slot", "volume", "missing map", "wrong map"} {
+	for _, mode := range []string{"image", "registry", "viewer", "slot", "missing map", "wrong map"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
@@ -29,9 +30,6 @@ func TestPreflightRejectsInvalidVehicleInputsWithoutStarting(t *testing.T) {
 				factory.Options.RvizRobots = []int{2}
 			case "slot":
 				factory.Slot = 3
-			case "volume":
-				factory.Options.DataVolumePrefix = "ci"
-				factory.Slot = 1
 			default:
 				var err error
 				raw, err = json.Marshal(Section{MapExport: "easygo/test.map_export", MapName: "expected"})
@@ -107,6 +105,15 @@ func TestPreflightRejectsStoredParameterDataFromAnotherSlot(t *testing.T) {
 	factory.Slot = 0
 	if err := factory.ValidateStart(context.Background(), oneRobotSession(t), nil); err != nil {
 		t.Fatalf("original slot must remain usable: %v", err)
+	}
+}
+
+func TestPreflightAllowsNamedVolumeMultipleRobotsAndSlots(t *testing.T) {
+	engine := &fakeEngine{}
+	factory := Factory{Engine: engine, SessionName: "beta", Slot: 1, Options: Options{AppImage: "runtime:tag", DataVolumePrefix: "ci"}}
+	session := contract.Session{World: "simple", Robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}}
+	if err := factory.ValidateStart(context.Background(), session, nil); err != nil {
+		t.Fatalf("named volume preflight rejected supported multi-robot slot: %v", err)
 	}
 }
 

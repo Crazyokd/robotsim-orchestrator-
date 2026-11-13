@@ -56,13 +56,23 @@ func (v Vehicle) Start(ctx context.Context) error {
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, launchArgs(v.Robot, v.Link.TopicPrefix, runtime, useRviz, useGzGui, v.Link.Cameras)...)
 	cmd = append(cmd, "world:="+v.Link.WorldPath)
 	var binds []string
+	archives := map[string][]byte{v.Link.AssetDirectory: v.Link.Archive}
 	if prefix := strings.TrimSpace(v.Options.DataVolumePrefix); prefix != "" {
-		// The daemon owns the writable volume. Sync defaults still require a host
-		// bind, hence the single-robot/slot-0 guard; world assets use the API archive.
+		// The daemon owns the writable volume. Copy the per-robot sync registry into
+		// the volume before launch; no host file bind is needed in this mode.
 		if v.SessionName != "" {
 			prefix += "-" + v.SessionName
 		}
-		binds = append(binds, prefix+"-"+v.Robot.Name+":"+runtimeRoot)
+		patched, err := v.readSyncConfig(ctx, v.Options.AppImage)
+		if err != nil {
+			return err
+		}
+		syncArchive, err := syncConfigArchive(patched)
+		if err != nil {
+			return err
+		}
+		archives[appRegistryDir] = syncArchive
+		binds = append(binds, fmt.Sprintf("%s-slot%d-%s:%s", prefix, v.Slot, v.Robot.Name, runtimeRoot))
 	} else {
 		hostSros, err := v.dataPath()
 		if err != nil {
@@ -103,7 +113,7 @@ func (v Vehicle) Start(ctx context.Context) error {
 		Command:  cmd,
 		Env:      appEnv(v.Robot, runtime, v.Link),
 		Binds:    binds,
-		Archives: map[string][]byte{v.Link.AssetDirectory: v.Link.Archive},
+		Archives: archives,
 		Network:  "host",
 		Ipc:      "host",
 		Devices:  gpu.Devices,

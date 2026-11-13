@@ -1,6 +1,7 @@
 package easygo
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
@@ -80,6 +81,21 @@ func (v Vehicle) initializeSyncConfig(ctx context.Context, runtimeImage, hostSro
 		return nil, fmt.Errorf("initialize sync config for %s: %w", v.Robot.Name, err)
 	}
 	return []string{hostPath + ":" + appRegistryDir + "/" + syncRegistry}, nil
+}
+
+func syncConfigArchive(patched []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	if err := w.WriteHeader(&tar.Header{Name: syncRegistry, Mode: 0o644, Size: int64(len(patched))}); err != nil {
+		return nil, err
+	}
+	if _, err := w.Write(patched); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // patchRegistryDefault rewrites default_value on one registry entry, preserving

@@ -18,7 +18,7 @@ type Options struct {
 	// DataRoot 是宿主数据根目录（空则用用户缓存目录），按会话名 / 车名分目录。
 	DataRoot string
 	// DataVolumePrefix 非空时改走 daemon 自管 named volume（每车
-	// <prefix>-<session>-<robot>），与 daemon 不共享文件系统的环境（CI docker
+	// <prefix>-<session>-slot<slot>-<robot>），与 daemon 不共享文件系统的环境（CI docker
 	// executor 里 simenv 跑在 runner 容器）必须用它：bind 源由 daemon 在
 	// 宿主机解析，simenv 侧的路径在宿主机上根本不存在。
 	DataVolumePrefix string
@@ -98,9 +98,6 @@ func (o Options) validateStart(session contract.Session, slot int) error {
 		if robot.Index > maxRobotIndexPerSlot {
 			return fmt.Errorf("robot index %d exceeds easygo resource block limit %d", robot.Index, maxRobotIndexPerSlot)
 		}
-	}
-	if strings.TrimSpace(o.DataVolumePrefix) != "" && (len(session.Robots) != 1 || slot != 0) {
-		return fmt.Errorf("data-volume-prefix requires exactly one robot in slot 0; per-robot sync registry binds are unavailable")
 	}
 	for _, index := range o.RvizRobots {
 		if index < 1 || index > len(session.Robots) {

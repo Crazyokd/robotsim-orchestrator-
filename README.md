@@ -30,7 +30,7 @@ docker build -f deploy/Dockerfile -t simenv-world-gazebo:local .
 
 名字允许字母、数字、下划线和连字符，但不得以连字符开头；位姿各分量必须为有限数值。世界容器使用 `simenv-world-<session>`，车端使用 `simenv-vehicle-<session>-robotN`，两类资源使用独立的命名空间。
 
-EasyGo/Gazebo 当前支持 slot 0..2、每路最多 10 台车。EasyGo 数据在 `<data-root>/<session>/robotN`（默认 `$XDG_CACHE_HOME/simenv`）；named volume 为 `<prefix>-<session>-robotN`，目前只支持单车 slot 0。已有参数库的数据目录不能跨 slot 复用，因为 registry 模板不会改写已有参数值；遇到冲突需使用新的会话名或数据根。`start`/`stop` 对同一份名单互斥，冲突时报忙并提示重试。
+EasyGo/Gazebo 当前支持 slot 0..2、每路最多 10 台车。EasyGo 数据在 `<data-root>/<session>/robotN`（默认 `$XDG_CACHE_HOME/simenv`）；named volume 为 `<prefix>-<session>-slot<slot>-robotN`，sync registry 会在容器启动前通过 Docker archive 注入，因此支持多车和非零 slot。slot 也属于卷名，避免旧数据库在 slot 改变后被复用。已有参数库的数据目录不能跨 slot 复用，因为 registry 模板不会改写已有参数值；遇到冲突需使用新的会话名或数据根。`start`/`stop` 对同一份名单互斥，冲突时报忙并提示重试。
 
 无 Docker 的开发模式：`./simenv start --world nullworld --robots 2`（两个必填镜像 flag 只对 gazebo/easygo 实现生效，null 对零参数）。null 对是 `internal/ports/{world,vehicle}/null` 的状态文件实现——零容器零进程，`status`/`pose`/`reset`/`call`（原样回显）全部可用，状态在 `$XDG_CACHE_HOME/simenv/null*/`。它同时是「加实现不动框架」的架构自检：加一对新 Port = 两个新包 + 组合根注册表两行 + 一个 bundle 目录。实现种类由 bundle 的 `worlds`/`vehicles` 唯一键推导；不带 bundle 的裸世界必须显式给 `--world-kind` / `--vehicle-kind`。
 

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -246,7 +247,7 @@ func TestNamedVolumeFollowsSessionNameAcrossSlotReuse(t *testing.T) {
 			t.Fatal(err)
 		}
 		spec := engine.started[len(engine.started)-1]
-		if want := []string{"ci-1-" + name + "-robot1:/sros"}; !slices.Equal(spec.Binds, want) {
+		if want := []string{"ci-1-" + name + "-slot0-robot1:/sros"}; !slices.Equal(spec.Binds, want) {
 			t.Fatalf("%s binds=%v, want %v", name, spec.Binds, want)
 		}
 		if err := vehicle.Stop(context.Background()); err != nil {
@@ -608,7 +609,7 @@ func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
 	if err := vehicle.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := engine.started[0].Binds, []string{"ci-1-robot1:/sros"}; !slices.Equal(got, want) {
+	if got, want := engine.started[0].Binds, []string{"ci-1-slot0-robot1:/sros"}; !slices.Equal(got, want) {
 		t.Fatalf("binds=%v, want exactly %v", got, want)
 	}
 	if len(engine.started[0].Archives["/opt"]) == 0 {
@@ -619,43 +620,55 @@ func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
 	}
 }
 
-func TestStartRejectsParallelNamedVolumeResources(t *testing.T) {
-	cases := []struct {
-		name   string
-		robots []contract.Robot
-		slot   int
-	}{
-		{
-			name:   "multiple robots",
-			robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}},
-		},
-		{
-			name:   "parallel session slot",
-			robots: []contract.Robot{{Index: 1, Name: "robot1"}},
-			slot:   1,
-		},
+func TestNamedVolumeInjectsSyncConfigForMultipleRobotsAndSlots(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+	session := contract.Session{World: "simple", Robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}}
+	factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataVolumePrefix: "ci-1"}, SessionName: "beta", Slot: 1}
+	for _, robot := range session.Robots {
+		vehicle, err := factory.New(context.Background(), session, robot, testLink(t, robot), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := vehicle.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		spec := engine.started[len(engine.started)-1]
+		if got, want := spec.Binds, []string{"ci-1-beta-slot1-" + robot.Name + ":/sros"}; !slices.Equal(got, want) {
+			t.Fatalf("%s binds=%v, want %v", robot.Name, got, want)
+		}
+		archive, ok := spec.Archives[appRegistryDir]
+		if !ok || len(archive) == 0 {
+			t.Fatalf("%s sync archive missing: %v", robot.Name, spec.Archives)
+		}
+		reader := tar.NewReader(bytes.NewReader(archive))
+		header, err := reader.Next()
+		if err != nil || header.Name != syncRegistry {
+			t.Fatalf("%s sync archive entry=%v, error=%v", robot.Name, header, err)
+		}
+		body, err := io.ReadAll(reader)
+		if err != nil || !strings.Contains(string(body), "default_value: "+strconv.Itoa(syncMembershipPortBase+(robot.Index-1)*syncPortStride+10000)) {
+			t.Fatalf("%s sync archive body=%q, error=%v", robot.Name, body, err)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
-			session := contract.Session{World: "simple", Robots: tc.robots}
-			factory := Factory{
-				Engine:      engine,
-				Options:     Options{AppImage: "runtime-sim:tag", DataVolumePrefix: "ci-1"},
-				SessionName: "session",
-				Slot:        tc.slot,
-			}
-			vehicle, err := factory.New(context.Background(), session, tc.robots[0], testLink(t, tc.robots[0]), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := vehicle.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "data-volume-prefix requires exactly one robot in slot 0") {
-				t.Fatalf("start error=%v", err)
-			}
-			if len(engine.started) != 0 {
-				t.Fatalf("named-volume guard started containers: %v", engine.started)
-			}
-		})
+}
+
+func TestNamedVolumeIncludesSlotToProtectPersistentParameters(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+	session := oneRobotSession(t)
+	for _, slot := range []int{0, 1} {
+		factory := Factory{Engine: engine, SessionName: "alpha", Slot: slot, Options: Options{AppImage: "runtime-sim:tag", DataVolumePrefix: "ci"}}
+		vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(t, session.Robots[0]), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := vehicle.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		got := engine.started[len(engine.started)-1].Binds[0]
+		want := fmt.Sprintf("ci-alpha-slot%d-robot1:/sros", slot)
+		if got != want {
+			t.Fatalf("slot %d volume=%q, want %q", slot, got, want)
+		}
 	}
 }
 
