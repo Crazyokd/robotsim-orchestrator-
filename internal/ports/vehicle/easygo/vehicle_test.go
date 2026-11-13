@@ -121,6 +121,104 @@ func TestNamedSessionShiftsContainerAndPorts(t *testing.T) {
 	}
 }
 
+func TestNamedSessionsKeepSeparateDataAcrossSlotReuse(t *testing.T) {
+	for _, mode := range []string{"explicit root", "cache root"} {
+		t.Run(mode, func(t *testing.T) {
+			dataRoot := t.TempDir()
+			options := Options{AppImage: "runtime-sim:tag", DataRoot: dataRoot}
+			if mode == "cache root" {
+				t.Setenv("XDG_CACHE_HOME", dataRoot)
+				dataRoot = filepath.Join(dataRoot, "simenv")
+				options.DataRoot = ""
+			}
+			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+			session := oneRobotSession(t)
+			for i, tc := range []struct {
+				name string
+				slot int
+				port string
+			}{
+				{name: "alpha", slot: 0, port: "25354"},
+				{name: "beta", slot: 1, port: "35354"},
+				{name: "alpha", slot: 1, port: "35354"},
+			} {
+				factory := Factory{Engine: engine, Options: options, SessionName: tc.name, Slot: tc.slot}
+				vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := vehicle.Start(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				spec := engine.started[len(engine.started)-1]
+				root := filepath.Join(dataRoot, tc.name, "robot1")
+				if got, want := spec.Binds[0], root+":/sros"; got != want {
+					t.Fatalf("%s data bind=%q, want %q", tc.name, got, want)
+				}
+				registryPath := filepath.Join(root, "app-config", "function.sync.yaml")
+				if !slices.Contains(spec.Binds, registryPath+":"+appRegistryDir+"/"+syncRegistry) {
+					t.Fatalf("%s registry bind missing: %v", tc.name, spec.Binds)
+				}
+				registry, err := os.ReadFile(registryPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(registry), "default_value: "+tc.port) {
+					t.Fatalf("%s registry has wrong port: %s", tc.name, registry)
+				}
+				marker := filepath.Join(root, "database-marker")
+				if i == 2 {
+					previous, err := os.ReadFile(marker)
+					if err != nil || string(previous) != tc.name {
+						t.Fatalf("%s lost data after slot change: marker=%q, error=%v", tc.name, previous, err)
+					}
+				}
+				if previous, err := os.ReadFile(marker); err == nil {
+					if string(previous) != tc.name {
+						t.Fatalf("%s reused another session's data: %s", tc.name, previous)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(marker, []byte(tc.name), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, name := range []string{"alpha", "beta"} {
+				marker, err := os.ReadFile(filepath.Join(dataRoot, name, "robot1", "database-marker"))
+				if err != nil || string(marker) != name {
+					t.Fatalf("%s data lost: marker=%q, error=%v", name, marker, err)
+				}
+			}
+		})
+	}
+}
+
+func TestNamedVolumeFollowsSessionNameAcrossSlotReuse(t *testing.T) {
+	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
+	session := oneRobotSession(t)
+	for _, name := range []string{"alpha", "beta", "alpha"} {
+		factory := Factory{
+			Engine: engine, SessionName: name,
+			Options: Options{AppImage: "runtime-sim:tag", DataVolumePrefix: "ci-1"},
+		}
+		vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := vehicle.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		spec := engine.started[len(engine.started)-1]
+		if want := []string{"ci-1-" + name + "-robot1:/sros"}; !slices.Equal(spec.Binds, want) {
+			t.Fatalf("%s binds=%v, want %v", name, spec.Binds, want)
+		}
+		if err := vehicle.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestSlotShiftsHostResourcesTheVehicleOwns(t *testing.T) {
 	base := runtimeFor(10, 0)
 	shifted := runtimeFor(1, 1)

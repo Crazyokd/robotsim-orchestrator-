@@ -86,6 +86,9 @@ func (v Vehicle) Start(ctx context.Context) error {
 		// 被 daemon 建成目录再挂到文件目标而失败），此形态下一律不挂——车辆
 		// 身份由 launch 的 SERIAL_NUMBER 播种（单车无 sync 端口冲突），世界
 		// SDF 用车端镜像自带那份（与环境 pinned 资产同源）。
+		if v.SessionName != "" {
+			prefix += "-" + v.SessionName
+		}
 		binds = append(binds, prefix+"-"+v.Robot.Name+":"+runtimeRoot)
 	} else {
 		dataRoot := v.Options.DataRoot
@@ -96,7 +99,7 @@ func (v Vehicle) Start(ctx context.Context) error {
 			}
 			dataRoot = filepath.Join(cache, "simenv")
 		}
-		hostSros := filepath.Join(dataRoot, v.Robot.Name)
+		hostSros := filepath.Join(dataRoot, v.SessionName, v.Robot.Name)
 		if err := os.MkdirAll(hostSros, 0o755); err != nil {
 			return err
 		}

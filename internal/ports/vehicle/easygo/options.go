@@ -13,10 +13,10 @@ import (
 type Options struct {
 	// AppImage 是车端镜像（必填）。
 	AppImage string
-	// DataRoot 是车端数据在宿主机的根目录（空则用用户缓存目录）。
+	// DataRoot 是宿主数据根目录（空则用用户缓存目录），按会话名 / 车名分目录。
 	DataRoot string
 	// DataVolumePrefix 非空时改走 daemon 自管 named volume（每车
-	// <prefix>-<robot>），与 daemon 不共享文件系统的环境（CI docker
+	// <prefix>-<session>-<robot>），与 daemon 不共享文件系统的环境（CI docker
 	// executor 里 simenv 跑在 runner 容器）必须用它：bind 源由 daemon 在
 	// 宿主机解析，simenv 侧的路径在宿主机上根本不存在。
 	DataVolumePrefix string
