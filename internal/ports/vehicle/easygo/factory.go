@@ -120,14 +120,6 @@ func (f Factory) ValidateStart(ctx context.Context, session contract.Session, ra
 	if err := f.Options.validateStart(session, f.Slot); err != nil {
 		return err
 	}
-	if strings.TrimSpace(f.Options.DataVolumePrefix) == "" {
-		for _, robot := range session.Robots {
-			vehicle := Vehicle{Options: f.Options, SessionName: f.SessionName, Slot: f.Slot, Robot: robot}
-			if err := vehicle.validateStoredSyncConfig(); err != nil {
-				return err
-			}
-		}
-	}
 	if len(rawSection) > 0 {
 		section, err := parseSection(rawSection)
 		if err != nil {
@@ -144,9 +136,7 @@ func (f Factory) ValidateStart(ctx context.Context, session contract.Session, ra
 	if _, err := f.Engine.ImageID(ctx, f.Options.AppImage); err != nil {
 		return fmt.Errorf("vehicle image %q: %w", f.Options.AppImage, err)
 	}
-	vehicle := Vehicle{Engine: f.Engine, Robot: session.Robots[0], Slot: f.Slot}
-	_, err := vehicle.readSyncConfig(ctx, f.Options.AppImage)
-	return err
+	return nil
 }
 
 func (f Factory) New(_ context.Context, session contract.Session, robot contract.Robot, attachment orchestrator.Attachment, rawSection assets.Section) (orchestrator.VehiclePort, error) {

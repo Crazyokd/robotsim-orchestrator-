@@ -34,10 +34,6 @@ func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {
 	return "sha256:" + ref, nil
 }
 
-func (f *fakeEngine) ReadImageFile(context.Context, string, string) ([]byte, error) {
-	return nil, errors.New("fake image has no files")
-}
-
 func (f *fakeEngine) Start(_ context.Context, spec docker.ContainerSpec) error {
 	f.started = append(f.started, spec)
 	f.infos[spec.Name] = docker.ContainerInfo{

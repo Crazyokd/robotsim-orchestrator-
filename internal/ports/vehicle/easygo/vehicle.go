@@ -58,20 +58,11 @@ func (v Vehicle) Start(ctx context.Context) error {
 	var binds []string
 	archives := map[string][]byte{v.Link.AssetDirectory: v.Link.Archive}
 	if prefix := strings.TrimSpace(v.Options.DataVolumePrefix); prefix != "" {
-		// The daemon owns the writable volume. Copy the per-robot sync registry into
-		// the volume before launch; no host file bind is needed in this mode.
+		// The daemon owns the writable volume. The launch argument seeds the
+		// per-instance sync port; no host file bind is needed in this mode.
 		if v.SessionName != "" {
 			prefix += "-" + v.SessionName
 		}
-		patched, err := v.readSyncConfig(ctx, v.Options.AppImage)
-		if err != nil {
-			return err
-		}
-		syncArchive, err := syncConfigArchive(patched)
-		if err != nil {
-			return err
-		}
-		archives[appRegistryDir] = syncArchive
 		binds = append(binds, fmt.Sprintf("%s-slot%d-%s:%s", prefix, v.Slot, v.Robot.Name, runtimeRoot))
 	} else {
 		hostSros, err := v.dataPath()
@@ -88,11 +79,7 @@ func (v Vehicle) Start(ctx context.Context) error {
 		if err := os.Chmod(hostSros, 0o777); err != nil {
 			return fmt.Errorf("make %s writable for the vehicle user: %w", hostSros, err)
 		}
-		syncConfigBinds, err := v.initializeSyncConfig(ctx, v.Options.AppImage, hostSros)
-		if err != nil {
-			return err
-		}
-		binds = append([]string{hostSros + ":" + runtimeRoot}, syncConfigBinds...)
+		binds = append([]string{hostSros + ":" + runtimeRoot}, binds...)
 	}
 	labels := map[string]string{
 		docker.LabelManaged: "true",
@@ -134,7 +121,7 @@ func (v Vehicle) dataPath() (string, error) {
 		}
 		root = filepath.Join(cache, "simenv")
 	}
-	return filepath.Abs(filepath.Join(root, v.SessionName, v.Robot.Name))
+	return filepath.Abs(filepath.Join(root, v.SessionName, fmt.Sprintf("slot%d", v.Slot), v.Robot.Name))
 }
 
 func (v Vehicle) Status(ctx context.Context) (orchestrator.VehicleStatus, error) {

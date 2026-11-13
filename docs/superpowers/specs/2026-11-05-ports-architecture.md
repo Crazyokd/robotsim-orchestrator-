@@ -38,7 +38,7 @@ internal/cli                        只解析框架 flag，调 Runner
 internal/ports/runtime/docker       Engine 实现
 internal/ports/world/gazebo         宿主侧 DockerWorld、ready 轮询、Attachment 定义
 internal/ports/world/gazebo/process 容器侧 Process · GZ · SDF 重写（现 internal/world）
-internal/ports/vehicle/easygo       EasyGoVehicle、factory、端口算术、registry 补丁、
+internal/ports/vehicle/easygo       EasyGoVehicle、factory、端口算术、参数 launch 接线、
                                     地图导入/站点/初始位姿客户端、世界系→地图系换算
 internal/ports/world/gazebo/assets.go  环境镜像资产读取、声明 SDF 校验与 Attachment 交付
 internal/ports/world/null           第二个世界实现：状态文件，零容器（§12）
@@ -164,7 +164,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 | `orchestrator.DockerWorld` / `waitReady` / `readReady` | `ports/world/gazebo` |
 | `control.go`：`Pose` / `Reset` 的编排路由 | 留在 `orchestrator`（只路由）；`DockerWorld` 的实现进 `ports/world/gazebo` |
 | `call.go`：`Call` 的编排路由 | 留在 `orchestrator`（只路由）；`Forward` / `dialAPI` 进 `ports/vehicle/easygo` |
-| `orchestrator.EasyGoVehicle*` / `localization.go` / `stations.go` / 端口算术 / registry 补丁 / `worldMapName` / `mapAlreadyExists` / `mapPose` | `ports/vehicle/easygo` |
+| `orchestrator.EasyGoVehicle*` / `localization.go` / `stations.go` / 端口算术 / 参数 launch 接线 / `worldMapName` / `mapAlreadyExists` / `mapPose` | `ports/vehicle/easygo` |
 | `internal/world`（Process / GZ / sdf） | `ports/world/gazebo/process` |
 | `orchestrator/docker.go` | `ports/runtime/docker` |
 | 世界 SDF / GUI 模型资产 | Gazebo Port 从环境镜像读取完整资产归档，经 Attachment 交给 EasyGo Port；Docker runtime 在车端启动前复制 |
@@ -181,7 +181,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 | 1 | Session / Robot / Pose 补 json tag（线上格式显式化）；`WorldReady` 定义进 `orchestrator`，框架接口不再引用 `internal/world` 类型 | 单测：接口签名编译期对齐 |
 | 2 | `docker.go` → `ports/runtime/docker` | 纯搬，测试跟随 |
 | 3 | `DockerWorld` + ready 轮询 + `Pose`/`Reset` 实现 + `internal/world` → `ports/world/gazebo`；`Attachment`；`Partition`/`TopicPrefix` 出 Session；`cmd/simenv-world-gazebo` 改名、Dockerfile 同步 | `docker build` 过；fake 世界 Port 测状态机 |
-| 4 | `EasyGoVehicle*`、`Forward`、`localization.go`、`stations.go`、端口算术、registry 补丁、地图解析、坐标换算 → `ports/vehicle/easygo`；`Provision` 合并三步；`worldInit` 通用化 | 原测试跟随；换算单测对账现有 mm 值 |
+| 4 | `EasyGoVehicle*`、`Forward`、`localization.go`、`stations.go`、端口算术、参数 launch 接线、地图解析、坐标换算 → `ports/vehicle/easygo`；`Provision` 合并三步；`worldInit` 通用化 | 原测试跟随；换算单测对账现有 mm 值 |
 | 5 | `internal/assets` + bundle 新格式：目录重排、站点换算、按 kind 分节；资产一致性测试拆三份 | `TestShippedWorldBundles*` 全绿 |
 | 6 | `StartConfig` 瘦身、Port `Options` + flag、删 `withDefaults`、`Orchestrator` 去 `Engine`/`AppReady`；CI 加 `rg` 断言 | `cli_test` 更新；CI 绿 |
 | 7 | README、三个项目 skill 的路径/命令/镜像名对齐 | 命令与源码一致 |
@@ -220,13 +220,14 @@ bundle 只为它声明的种类供节。nullworld 只有 `worlds.null` / `vehicl
 - 同名替换保留原 slot，新名字才领取空闲 slot。`start` / `stop` 在同一份名单上使用进程锁；冲突立即报忙，查询不取此锁。
 - Port 预检通过、旧会话停止后，在启动世界之前写入名字、种类、slot 和启动时间。随后任一步失败都回滚：清理完全成功才删除记录，清理失败保留记录和 slot，允许点名 `stop` 重试；进程意外退出也保留恢复入口。
 - 名单严格校验必填字段、名称、时间和 slot 唯一性。`status` 收集所有会话的结果和具名错误；一路失败不隐藏其他会话，同时保留失败退出码。
-- EasyGo 的三路资源、每路十车监听端口和 display 由 Port 计算；参数 HTTP 端口也显式传给 launch。同名数据归会话所有，已有参数库的 sync 端口绑定不同 slot 时预检失败，避免将旧值当作新模板已生效。
+- EasyGo 的三路资源、每路十车监听端口和 display 由 Port 计算；参数 HTTP 和 sync membership 端口也显式传给 launch。同名数据归会话和 slot 所有；host 数据目录按 slot 隔离，named volume 名含 slot，避免已有参数库的旧值跨 slot 复用。
 
 ### 12.5 世界资产交付（2026-11-13）
 
 - `worlds.gazebo.sdf` 为世界 bundle 内的相对路径，必须留在该目录内；Gazebo Port 从所选环境镜像的 `/opt/simenv` 读取资产归档，在启动前检查声明文件和 XML。裸世界使用本 Port 的 `gazebo/world.sdf` 目录约定。
 - 世界进程只接收显式 `--world-sdf` 路径，不再重新拼接 `gazebo/world.sdf`。修改世界和模型后须重建环境镜像。
 - Attachment 的 `WorldAssets()` 返回车端复制目标目录、SDF 绝对路径及资产 tar。框架原样转交；EasyGo Port 通过 Docker API 在进程启动前复制资产，向当前 runtime-sim 传入显式 `world:=<path>` 和 `EASYGO_SIM_WORLD=<path>`。
-- SDF、模型和相对引用保持与环境镜像相同的容器内路径。删除世界 SDF handover 和 GUI 的宿主 bind；named-volume 模式也接收同一份世界资产，并通过 archive 注入 per-robot sync registry，支持多车和非零 slot。slot 写入卷名，避免持久参数库跨 slot 复用。
+- SDF、模型和相对引用保持与环境镜像相同的容器内路径。删除世界 SDF handover 和 GUI 的宿主 bind；named-volume 模式也接收同一份世界资产，支持多车和非零 slot。slot 写入卷名，避免持久参数库跨 slot 复用。
 - 资产归档只接受 `simenv/` 树内的普通文件与目录；链接和特殊文件直接失败。SDF 必须为完整 XML 且恰好包含一个命名世界。
 - 资产复制失败时不启动进程，清理未启动的容器并保留原始/清理错误；镜像资产读取的临时容器清理错误也必须返回。
+- EasyGo 的 runtime-sim 必须包含支持 `sync_membership_port` launch 参数的 `easygo_sim_bringup`；simenv 关联上游 `SROS/platforms/easygo!1057`，该上游 MR 未进入镜像前不得做多车/多 slot 运行验收。

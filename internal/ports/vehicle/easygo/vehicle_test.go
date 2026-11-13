@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,12 +19,10 @@ import (
 )
 
 type fakeEngine struct {
-	imageErr   error
-	imageFiles map[string]string
-	readPaths  []string
-	started    []docker.ContainerSpec
-	stopped    []string
-	infos      map[string]docker.ContainerInfo
+	imageErr error
+	started  []docker.ContainerSpec
+	stopped  []string
+	infos    map[string]docker.ContainerInfo
 }
 
 func fixtureWorldArchive() ([]byte, error) {
@@ -51,34 +48,6 @@ func fixtureWorldArchive() ([]byte, error) {
 
 func (f *fakeEngine) ReadImageArchive(context.Context, string, string) ([]byte, error) {
 	return fixtureWorldArchive()
-}
-
-// fakeSyncRegistry mirrors the registry file the runtime image ships: its default
-// membership port collides across vehicles on a shared host network.
-const fakeSyncRegistry = `items:
-  - key: sync.discovery_backend
-    default_value: cluster-gossip
-    value_type: enum
-
-  - key: sync.membership_port
-    name: 同步 membership 端口
-    default_value: 25354
-    value_type: int32
-`
-
-// ReadImageFile stands in for reading the image's registry files.
-func (f *fakeEngine) ReadImageFile(_ context.Context, _, path string) ([]byte, error) {
-	f.readPaths = append(f.readPaths, path)
-	if f.imageFiles != nil {
-		if content, ok := f.imageFiles[path]; ok {
-			return []byte(content), nil
-		}
-	}
-	switch filepath.Base(path) {
-	case filepath.Base(syncRegistry):
-		return []byte(fakeSyncRegistry), nil
-	}
-	return nil, fmt.Errorf("fake image has no %s", path)
 }
 
 func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {
@@ -188,26 +157,14 @@ func TestNamedSessionsKeepSeparateDataAcrossSlotReuse(t *testing.T) {
 					t.Fatal(err)
 				}
 				spec := engine.started[len(engine.started)-1]
-				root := filepath.Join(dataRoot, tc.name, "robot1")
+				root := filepath.Join(dataRoot, tc.name, "slot"+strconv.Itoa(tc.slot), "robot1")
 				if got, want := spec.Binds[0], root+":/sros"; got != want {
 					t.Fatalf("%s data bind=%q, want %q", tc.name, got, want)
 				}
-				registryPath := filepath.Join(root, "app-config", "function.sync.yaml")
-				if !slices.Contains(spec.Binds, registryPath+":"+appRegistryDir+"/"+syncRegistry) {
-					t.Fatalf("%s registry bind missing: %v", tc.name, spec.Binds)
-				}
-				registry, err := os.ReadFile(registryPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !strings.Contains(string(registry), "default_value: "+tc.port) {
-					t.Fatalf("%s registry has wrong port: %s", tc.name, registry)
-				}
 				marker := filepath.Join(root, "database-marker")
 				if i == 2 {
-					previous, err := os.ReadFile(marker)
-					if err != nil || string(previous) != tc.name {
-						t.Fatalf("%s lost data after slot change: marker=%q, error=%v", tc.name, previous, err)
+					if _, err := os.Stat(marker); !os.IsNotExist(err) {
+						t.Fatalf("%s reused data from a different slot: %v", tc.name, err)
 					}
 				}
 				if previous, err := os.ReadFile(marker); err == nil {
@@ -217,14 +174,21 @@ func TestNamedSessionsKeepSeparateDataAcrossSlotReuse(t *testing.T) {
 				} else if !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
+				if !strings.Contains(strings.Join(spec.Command, " "), "sync_membership_port:=") {
+					t.Fatalf("%s sync port missing", tc.name)
+				}
 				if err := os.WriteFile(marker, []byte(tc.name), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
-			for _, name := range []string{"alpha", "beta"} {
-				marker, err := os.ReadFile(filepath.Join(dataRoot, name, "robot1", "database-marker"))
-				if err != nil || string(marker) != name {
-					t.Fatalf("%s data lost: marker=%q, error=%v", name, marker, err)
+			for _, item := range []struct{ path, name string }{
+				{filepath.Join(dataRoot, "alpha", "slot0", "robot1"), "alpha"},
+				{filepath.Join(dataRoot, "beta", "slot1", "robot1"), "beta"},
+				{filepath.Join(dataRoot, "alpha", "slot1", "robot1"), "alpha"},
+			} {
+				marker, err := os.ReadFile(filepath.Join(item.path, "database-marker"))
+				if err != nil || string(marker) != item.name {
+					t.Fatalf("data lost at %s: marker=%q, error=%v", item.path, marker, err)
 				}
 			}
 		})
@@ -360,8 +324,8 @@ func TestVehicleStartConfiguresTheContainer(t *testing.T) {
 	if appSpec.Env["GZ_IP"] != gazebo.GZIP || appSpec.Env["GZ_PARTITION"] != gazebo.Partition || appSpec.Env["ROS_DOMAIN_ID"] != "11" || appSpec.Env["BACKEND_PORT"] != "18191" {
 		t.Fatalf("app env=%v", appSpec.Env)
 	}
-	if appSpec.Env["PARAM_CFG_DIR"] != appRegistryDir {
-		t.Fatalf("parameter config dir=%q, want %q", appSpec.Env["PARAM_CFG_DIR"], appRegistryDir)
+	if appSpec.Env["PARAM_CFG_DIR"] != "/opt/sros/share/easygo-param-manager/cfg" {
+		t.Fatalf("parameter config dir=%q", appSpec.Env["PARAM_CFG_DIR"])
 	}
 }
 
@@ -459,14 +423,11 @@ func TestViewersArePerRobot(t *testing.T) {
 	}
 }
 
-func TestStartInitializesEachVehicleSyncRegistry(t *testing.T) {
+func TestStartPassesPerRobotSyncPortToLaunch(t *testing.T) {
 	dataRoot := t.TempDir()
 	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
 	factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataRoot: dataRoot}}
-	session := contract.Session{
-		World:  "simple",
-		Robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}},
-	}
+	session := contract.Session{World: "simple", Robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}}
 	for _, robot := range session.Robots {
 		vehicle, err := factory.New(context.Background(), session, robot, testLink(t, robot), nil)
 		if err != nil {
@@ -476,63 +437,21 @@ func TestStartInitializesEachVehicleSyncRegistry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	wantReadPaths := []string{
-		"/opt/sros/share/easygo-param-manager/cfg/" + syncRegistry,
-		"/opt/sros/share/easygo-param-manager/cfg/" + syncRegistry,
-	}
-	if !slices.Equal(engine.readPaths, wantReadPaths) {
-		t.Fatalf("registry reads=%v, want %v", engine.readPaths, wantReadPaths)
-	}
-
-	apps := map[string]docker.ContainerSpec{}
-	for _, spec := range engine.started {
-		apps[spec.Labels[vehicleRobotLabel]] = spec
-	}
-	for _, want := range []struct {
-		name       string
-		membership int
-	}{
-		{name: "robot1", membership: syncMembershipPortBase},
-		{name: "robot2", membership: syncMembershipPortBase + syncPortStride},
-	} {
-		spec, ok := apps[want.name]
-		if !ok {
-			t.Fatalf("no app container for %s", want.name)
+	for i, want := range []struct {
+		name string
+		port int
+	}{{"robot1", syncMembershipPortBase}, {"robot2", syncMembershipPortBase + syncPortStride}} {
+		spec := engine.started[i]
+		joined := strings.Join(spec.Command, " ")
+		if !strings.Contains(joined, "sync_membership_port:="+strconv.Itoa(want.port)) {
+			t.Fatalf("%s command missing sync port: %s", want.name, joined)
 		}
-		// The container command stays the plain launch; initialization happened
-		// before it, on the host, and reaches the container as mounts.
-		if len(spec.Command) < 3 || spec.Command[0] != "ros2" || spec.Command[1] != "launch" {
-			t.Fatalf("%s command=%v", want.name, spec.Command)
+		if got := filepath.Clean(spec.Binds[0]); got != filepath.Join(dataRoot, "slot0", want.name)+":/sros" {
+			t.Fatalf("%s data bind=%q", want.name, got)
 		}
-		hostDir := filepath.Join(dataRoot, want.name, appConfigHostDir)
-		wantBinds := []string{
-			filepath.Join(hostDir, "function.sync.yaml") + ":" + appRegistryDir + "/" + syncRegistry,
+		if len(spec.Binds) != 1 {
+			t.Fatalf("%s unexpected registry bind: %v", want.name, spec.Binds)
 		}
-		for _, wantBind := range wantBinds {
-			if !slices.Contains(spec.Binds, wantBind) {
-				t.Fatalf("%s binds=%v missing %s", want.name, spec.Binds, wantBind)
-			}
-		}
-		if len(spec.Binds) != 1+len(wantBinds) {
-			t.Fatalf("%s binds=%v", want.name, spec.Binds)
-		}
-		sync, err := os.ReadFile(filepath.Join(hostDir, "function.sync.yaml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(sync), "default_value: "+strconv.Itoa(want.membership)) {
-			t.Fatalf("%s membership port not pinned to %d:\n%s", want.name, want.membership, sync)
-		}
-		if want.membership != syncMembershipPortBase && strings.Contains(string(sync), "default_value: "+strconv.Itoa(syncMembershipPortBase)) {
-			t.Fatalf("%s stale membership port left:\n%s", want.name, sync)
-		}
-	}
-	robot2 := apps["robot2"]
-	if got := robot2.Env["MDNS_PORT"]; got != strconv.Itoa(mdnsPortBase+syncPortStride) {
-		t.Fatalf("robot2 MDNS_PORT=%q", got)
-	}
-	if _, ok := robot2.Env["PORT"]; ok {
-		t.Fatal("PORT must be left to the launch file")
 	}
 }
 
@@ -588,9 +507,8 @@ func TestStartCopiesWorldAssetsFromAttachment(t *testing.T) {
 	}
 }
 
-// daemon 隔离环境（CI docker executor：simenv 跑在 runner 容器，bind 源由
-// daemon 在宿主机解析）必须走 named volume：数据卷 daemon 自管，registry 与
-// SDF 的宿主文件 bind 一律不挂。
+// daemon 隔离环境必须走 named volume：数据卷由 daemon 管理，
+// sync registry 和世界资产分别通过 launch/archive 注入。
 func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
 	dir := t.TempDir()
 	writeWorldSDF(t, dir, "simple")
@@ -620,7 +538,7 @@ func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
 	}
 }
 
-func TestNamedVolumeInjectsSyncConfigForMultipleRobotsAndSlots(t *testing.T) {
+func TestNamedVolumePassesSyncPortToLaunchForMultipleRobotsAndSlots(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
 	session := contract.Session{World: "simple", Robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}}}
 	factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataVolumePrefix: "ci-1"}, SessionName: "beta", Slot: 1}
@@ -636,18 +554,9 @@ func TestNamedVolumeInjectsSyncConfigForMultipleRobotsAndSlots(t *testing.T) {
 		if got, want := spec.Binds, []string{"ci-1-beta-slot1-" + robot.Name + ":/sros"}; !slices.Equal(got, want) {
 			t.Fatalf("%s binds=%v, want %v", robot.Name, got, want)
 		}
-		archive, ok := spec.Archives[appRegistryDir]
-		if !ok || len(archive) == 0 {
-			t.Fatalf("%s sync archive missing: %v", robot.Name, spec.Archives)
-		}
-		reader := tar.NewReader(bytes.NewReader(archive))
-		header, err := reader.Next()
-		if err != nil || header.Name != syncRegistry {
-			t.Fatalf("%s sync archive entry=%v, error=%v", robot.Name, header, err)
-		}
-		body, err := io.ReadAll(reader)
-		if err != nil || !strings.Contains(string(body), "default_value: "+strconv.Itoa(syncMembershipPortBase+(robot.Index-1)*syncPortStride+10000)) {
-			t.Fatalf("%s sync archive body=%q, error=%v", robot.Name, body, err)
+		joined := strings.Join(spec.Command, " ")
+		if !strings.Contains(joined, "sync_membership_port:="+strconv.Itoa(syncMembershipPortBase+(robot.Index-1)*syncPortStride+10000)) {
+			t.Fatalf("%s sync launch arg missing: %s", robot.Name, joined)
 		}
 	}
 }

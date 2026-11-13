@@ -15,7 +15,7 @@ import (
 )
 
 func TestPreflightRejectsInvalidVehicleInputsWithoutStarting(t *testing.T) {
-	for _, mode := range []string{"image", "registry", "viewer", "slot", "missing map", "wrong map"} {
+	for _, mode := range []string{"image", "viewer", "slot", "missing map", "wrong map"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
@@ -24,8 +24,6 @@ func TestPreflightRejectsInvalidVehicleInputsWithoutStarting(t *testing.T) {
 			switch mode {
 			case "image":
 				engine.imageErr = errors.New("image absent")
-			case "registry":
-				engine.imageFiles = map[string]string{appRegistryDir + "/" + syncRegistry: "items: []"}
 			case "viewer":
 				factory.Options.RvizRobots = []int{2}
 			case "slot":
@@ -80,31 +78,6 @@ func TestDiscoveryAndStopUseOnlyTheSelectedSession(t *testing.T) {
 	}
 	if len(engine.stopped) != 1 || engine.stopped[0] != "alpha-container" || !engine.infos["beta-container"].Running {
 		t.Fatalf("stop affected another session: %v", engine.stopped)
-	}
-}
-
-func TestPreflightRejectsStoredParameterDataFromAnotherSlot(t *testing.T) {
-	dir := t.TempDir()
-	root := filepath.Join(dir, "alpha", "robot1")
-	if err := os.MkdirAll(filepath.Join(root, "db"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "app-config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "db", "cfg.db3"), []byte("existing database"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "app-config", "function.sync.yaml"), []byte(fakeSyncRegistry), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	factory := Factory{Engine: &fakeEngine{}, SessionName: "alpha", Slot: 1, Options: Options{AppImage: "runtime:tag", DataRoot: dir}}
-	if err := factory.ValidateStart(context.Background(), oneRobotSession(t), nil); err == nil || !strings.Contains(err.Error(), "another slot") {
-		t.Fatalf("stored cold parameter must not be silently reused: %v", err)
-	}
-	factory.Slot = 0
-	if err := factory.ValidateStart(context.Background(), oneRobotSession(t), nil); err != nil {
-		t.Fatalf("original slot must remain usable: %v", err)
 	}
 }
 

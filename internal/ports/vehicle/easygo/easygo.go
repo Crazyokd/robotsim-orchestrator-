@@ -2,7 +2,7 @@
 // easygo_sim_bringup sim_easygo.launch.py start_gazebo:=false），经 HTTP API
 // 灌地图、注站点、放车定位。
 //
-// 本包的约定只属于本包：HTTP/ROS 端口算术、registry 补丁、地图坐标系
+// 本包的约定只属于本包：HTTP/ROS 端口算术、参数 launch 接线、地图坐标系
 // （世界系 ↔ 地图系 mm）、"世界 = 地图 + origin_offset" 的换算。它们不进
 // contract，也不进编排框架。
 //
