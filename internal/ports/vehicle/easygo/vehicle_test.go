@@ -19,10 +19,11 @@ import (
 )
 
 type fakeEngine struct {
-	imageErr error
-	started  []docker.ContainerSpec
-	stopped  []string
-	infos    map[string]docker.ContainerInfo
+	imageErr    error
+	imageLaunch []byte
+	started     []docker.ContainerSpec
+	stopped     []string
+	infos       map[string]docker.ContainerInfo
 }
 
 func fixtureWorldArchive() ([]byte, error) {
@@ -46,7 +47,25 @@ func fixtureWorldArchive() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (f *fakeEngine) ReadImageArchive(context.Context, string, string) ([]byte, error) {
+func (f *fakeEngine) ReadImageArchive(_ context.Context, _, path string) ([]byte, error) {
+	if f.imageLaunch != nil {
+		return f.imageLaunch, nil
+	}
+	if strings.Contains(path, "sim_easygo.launch.py") {
+		var buf bytes.Buffer
+		w := tar.NewWriter(&buf)
+		body := "DeclareLaunchArgument('sync_membership_port')"
+		if err := w.WriteHeader(&tar.Header{Name: "sim_easygo.launch.py", Size: int64(len(body)), Mode: 0o644}); err != nil {
+			return nil, err
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			return nil, err
+		}
+		if err := w.Close(); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
 	return fixtureWorldArchive()
 }
 

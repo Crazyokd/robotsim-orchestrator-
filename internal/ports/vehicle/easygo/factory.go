@@ -1,10 +1,12 @@
 package easygo
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -136,7 +138,31 @@ func (f Factory) ValidateStart(ctx context.Context, session contract.Session, ra
 	if _, err := f.Engine.ImageID(ctx, f.Options.AppImage); err != nil {
 		return fmt.Errorf("vehicle image %q: %w", f.Options.AppImage, err)
 	}
+	launch, err := f.Engine.ReadImageArchive(ctx, f.Options.AppImage, "/opt/sros/share/easygo_sim_bringup/launch/sim_easygo.launch.py")
+	if err != nil {
+		return fmt.Errorf("vehicle image %q lacks sim_easygo.launch.py: %w", f.Options.AppImage, err)
+	}
+	if !bytes.Contains(archiveRegularFile(launch), []byte("sync_membership_port")) {
+		return fmt.Errorf("vehicle image %q has no sync_membership_port launch argument; use a runtime image containing EasyGo MR !1057", f.Options.AppImage)
+	}
 	return nil
+}
+
+func archiveRegularFile(raw []byte) []byte {
+	reader := tar.NewReader(bytes.NewReader(raw))
+	for {
+		header, err := reader.Next()
+		if err != nil {
+			return nil
+		}
+		if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
+			body, err := io.ReadAll(reader)
+			if err == nil {
+				return body
+			}
+			return nil
+		}
+	}
 }
 
 func (f Factory) New(_ context.Context, session contract.Session, robot contract.Robot, attachment orchestrator.Attachment, rawSection assets.Section) (orchestrator.VehiclePort, error) {

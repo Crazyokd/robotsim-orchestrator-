@@ -36,6 +36,8 @@ EasyGo/Gazebo 当前支持 slot 0..2、每路最多 10 台车。EasyGo 数据在
 
 世界的 SDF 路径以 bundle 的 `worlds.gazebo.sdf` 为准，内容和模型取自 `--env-image` 中的 `/opt/simenv`；车端在启动前通过 Docker API 接收同一份资产，并使用显式 SDF 路径。资产交接不依赖宿主目录 bind，缺失或复制失败会直接报错。修改世界或模型后须重建环境镜像；程序镜像需使用支持显式 `world` 路径的当前 runtime-sim。
 
+`--app-image` 还必须包含支持 `sync_membership_port:=...` 的 EasyGo launch；对应上游 MR 是 `SROS/platforms/easygo!1057`。simenv 会在替换旧会话前检查这一能力，旧 runtime 镜像会直接失败。
+
 当前 `--app-image` 必须包含支持 `sync_membership_port:=...` 的 EasyGo launch；对应上游 MR 是 `SROS/platforms/easygo!1057`。在该 MR 进入 runtime-sim 版本前，simenv 的多车/多 slot 启动不具备运行时条件。
 
 世界是一个 bundle：`deploy/assets/worlds/<world>/`（manifest + 各 Port 的文件，
