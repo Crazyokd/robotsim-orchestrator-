@@ -40,7 +40,7 @@ internal/ports/world/gazebo         宿主侧 DockerWorld、ready 轮询、Attac
 internal/ports/world/gazebo/process 容器侧 Process · GZ · SDF 重写（现 internal/world）
 internal/ports/vehicle/easygo       EasyGoVehicle、factory、端口算术、registry 补丁、
                                     地图导入/站点/初始位姿客户端、世界系→地图系换算
-internal/ports/vehicle/easygo/gazebo.go  EasyGo-on-Gazebo 配对：launch 参数、GZ 环境变量、世界 SDF 交接 bind
+internal/ports/world/gazebo/assets.go  环境镜像资产读取、声明 SDF 校验与 Attachment 交付
 internal/ports/world/null           第二个世界实现：状态文件，零容器（§12）
 internal/ports/vehicle/null         第二个车端实现：状态文件，零容器（§12）
 ```
@@ -137,7 +137,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 世界 Port 启动后产出每车的 `Attachment`；车端 `Factory.New` 认自己要的挂接形状：
 
 - 认得 → 继续；不认得或缺它那种资产节 → **报错**。
-- 配对按形状，不按具体 Go 类型。null 车只认 `nullworld.Attachment`。EasyGo 认能给出连接端点的挂接（`Endpoint` + `HasCameras`）；null 世界给不出这个形状，`Factory.New` 直接失败。
+- 配对按形状，不按具体 Go 类型。null 车只认 `nullworld.Attachment`。EasyGo 认能给出连接端点和完整世界资产的挂接（`Endpoint` + `HasCameras` + `WorldAssets`）；null 世界给不出这个形状，`Factory.New` 直接失败。
 - `ports/vehicle/easygo` 不 import `ports/world/gazebo`。Gazebo 的 `Attachment` 实现这组方法；另一套世界只要同样实现，就能接上这辆车，不用改 EasyGo。
 - Gazebo Port 的容器进程、`--cameras`、partition 常量、`robotN` 话题前缀全部留在 `ports/world/gazebo`；`GZ_IP` / `GZ_PARTITION` 是它的约定，不是仓库级约定。
 
@@ -151,7 +151,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 
 容器运行时惰性构造：裸世界（`--world null` 这种无 bundle 的）起停与 `pose`/`reset`/`call` 不碰 Docker。
 
-`withDefaults` 四处全删；`--world` 不给即报错。`assetsPath` / `gzGuiAssetBind` 两套解析并为 `internal/assets` 一处；缺文件是错误，不再返回空串。车端 HTTP 客户端带超时；CLI 给 `start` 配 context 超时。
+`withDefaults` 四处全删；`--world` 不给即报错。宿主地图路径由 `internal/assets` 解析；世界 SDF 和模型由环境镜像提供，经 Docker archive API 交付车端，缺失直接报错。车端 HTTP 客户端带超时；CLI 给 `start` 配 context 超时。
 
 ## 9. 现状符号落点
 
@@ -167,7 +167,7 @@ type VehicleStatus struct{ Name string; Running bool; Endpoint string; Detail ma
 | `orchestrator.EasyGoVehicle*` / `localization.go` / `stations.go` / 端口算术 / registry 补丁 / `worldMapName` / `mapAlreadyExists` / `mapPose` | `ports/vehicle/easygo` |
 | `internal/world`（Process / GZ / sdf） | `ports/world/gazebo/process` |
 | `orchestrator/docker.go` | `ports/runtime/docker` |
-| `assetsPath` / `worldHandoverBind` / `gzGuiAssetBind` | `internal/assets`（世界 SDF 交接 bind 归 `easygo/gazebo.go`） |
+| 世界 SDF / GUI 模型资产 | Gazebo Port 从环境镜像读取完整资产归档，经 Attachment 交给 EasyGo Port；Docker runtime 在车端启动前复制 |
 | `worldInit`（阶段顺序、失败回滚） | 留在 `orchestrator`，改调 `Provision` |
 | `cmd/simenv-world` | `cmd/simenv-world-gazebo`；镜像 tag `simenv-world-gazebo:local` |
 
@@ -221,3 +221,12 @@ bundle 只为它声明的种类供节。nullworld 只有 `worlds.null` / `vehicl
 - Port 预检通过、旧会话停止后，在启动世界之前写入名字、种类、slot 和启动时间。随后任一步失败都回滚：清理完全成功才删除记录，清理失败保留记录和 slot，允许点名 `stop` 重试；进程意外退出也保留恢复入口。
 - 名单严格校验必填字段、名称、时间和 slot 唯一性。`status` 收集所有会话的结果和具名错误；一路失败不隐藏其他会话，同时保留失败退出码。
 - EasyGo 的三路资源、每路十车监听端口和 display 由 Port 计算；参数 HTTP 端口也显式传给 launch。同名数据归会话所有，已有参数库的 sync 端口绑定不同 slot 时预检失败，避免将旧值当作新模板已生效。
+
+### 12.5 世界资产交付（2026-11-13）
+
+- `worlds.gazebo.sdf` 为世界 bundle 内的相对路径，必须留在该目录内；Gazebo Port 从所选环境镜像的 `/opt/simenv` 读取资产归档，在启动前检查声明文件和 XML。裸世界使用本 Port 的 `gazebo/world.sdf` 目录约定。
+- 世界进程只接收显式 `--world-sdf` 路径，不再重新拼接 `gazebo/world.sdf`。修改世界和模型后须重建环境镜像。
+- Attachment 的 `WorldAssets()` 返回车端复制目标目录、SDF 绝对路径及资产 tar。框架原样转交；EasyGo Port 通过 Docker API 在进程启动前复制资产，向当前 runtime-sim 传入显式 `world:=<path>` 和 `EASYGO_SIM_WORLD=<path>`。
+- SDF、模型和相对引用保持与环境镜像相同的容器内路径。删除世界 SDF handover 和 GUI 的宿主 bind；named-volume 模式也接收同一份世界资产，sync 参数的单车 slot 0 限制独立保留。
+- 资产归档只接受 `simenv/` 树内的普通文件与目录；链接和特殊文件直接失败。SDF 必须为完整 XML 且恰好包含一个命名世界。
+- 资产复制失败时不启动进程，清理未启动的容器并保留原始/清理错误；镜像资产读取的临时容器清理错误也必须返回。

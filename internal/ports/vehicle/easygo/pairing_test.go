@@ -31,10 +31,11 @@ func TestNewAcceptsForeignEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	link := testLink(t, robot)
 	port, err := Factory{}.New(context.Background(),
 		contract.Session{World: "other", Robots: []contract.Robot{robot}},
 		robot,
-		otherWorld{cameras: true, ip: "10.0.0.8", partition: "other_sim", prefix: "robot1"},
+		otherWorld{cameras: true, ip: "10.0.0.8", partition: "other_sim", prefix: "robot1", sdf: link.SDFPath, archive: link.Archive},
 		nil)
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +66,8 @@ func TestNewRejectsIncompleteEndpoint(t *testing.T) {
 }
 
 type otherWorld struct {
+	archive               []byte
+	sdf                   string
 	cameras               bool
 	ip, partition, prefix string
 }
@@ -74,3 +77,5 @@ func (o otherWorld) Endpoint() (string, string, string) {
 	return o.ip, o.partition, o.prefix
 }
 func (o otherWorld) HasCameras() bool { return o.cameras }
+
+func (o otherWorld) WorldAssets() (string, string, []byte) { return "/opt", o.sdf, o.archive }

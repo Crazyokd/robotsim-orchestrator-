@@ -26,7 +26,7 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("simenv-world-gazebo", flag.ContinueOnError)
 	sessionText := fs.String("session", "", "")
 	camerasText := fs.String("cameras", "", "")
-	assets := fs.String("assets", "/opt/simenv", "")
+	worldSDF := fs.String("world-sdf", "", "")
 	model := fs.String("model", "/opt/simenv/models/easygo_bj_bkn_description/models/easygo_bj_bkn_model.sdf", "")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -57,12 +57,11 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	proc := process.Process{
-		AssetsRoot: *assets + "/worlds",
-		ModelPath:  *model,
-		ReadyPath:  process.ReadyPath,
-		Transport:  process.GZ{},
-		WorldName:  session.World,
-		Bodies:     bodies,
+		WorldPath: *worldSDF,
+		ModelPath: *model,
+		ReadyPath: process.ReadyPath,
+		Transport: process.GZ{},
+		Bodies:    bodies,
 	}
 	return proc.Run(ctx)
 }

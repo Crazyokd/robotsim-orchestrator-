@@ -30,7 +30,7 @@ const (
 	// URIs. The robot description lives in the app image under /opt/sros/share,
 	// world models (pallets, cages) in the bringup package. Empty here means
 	// every robot link mesh fails to load and the vehicle renders as nothing.
-	appGZResourcePath = "/opt/sros/share:/opt/sros/share/easygo_sim_bringup/models"
+	appGZResourcePath = "/opt/simenv/models:/opt/sros/share:/opt/sros/share/easygo_sim_bringup/models"
 
 	// appReadyTimeout bounds how long a starting vehicle may take to serve its
 	// API before the whole start is rolled back.

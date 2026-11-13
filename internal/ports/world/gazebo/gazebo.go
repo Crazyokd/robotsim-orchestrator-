@@ -33,6 +33,8 @@ type Attachment struct {
 	IP          string
 	Partition   string
 	TopicPrefix string
+	SDFPath     string
+	Archive     []byte
 }
 
 func (Attachment) Kind() string { return Kind }
@@ -44,6 +46,11 @@ func (a Attachment) Endpoint() (ip, partition, topicPrefix string) {
 
 // HasCameras 报告本世界是否为这台车 spawn 了相机。
 func (a Attachment) HasCameras() bool { return a.Cameras }
+
+// WorldAssets supplies the environment image's assets at the same container paths.
+func (a Attachment) WorldAssets() (directory, sdfPath string, archive []byte) {
+	return "/opt", a.SDFPath, a.Archive
+}
 
 // attachmentFor 派生一台车的挂接信息。TopicPrefix 与实体名同形（robotN）：
 // GZ topic 前缀即实体名，这是本 Port 的接线约定。

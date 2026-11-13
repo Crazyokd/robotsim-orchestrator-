@@ -151,9 +151,11 @@ type ContainerSpec struct {
 	Command []string
 	Env     map[string]string
 	Binds   []string
-	Network string
-	Ipc     string
-	Devices []string
+	// Archives are copied to container directories before its process starts.
+	Archives map[string][]byte
+	Network  string
+	Ipc      string
+	Devices  []string
 	// Runtime 为空时用守护进程的默认运行时。NVIDIA 设备为 "nvidia"。
 	Runtime string
 	Labels  map[string]string
@@ -173,6 +175,7 @@ type Engine interface {
 	ImageID(ctx context.Context, ref string) (string, error)
 	// ReadImageFile reads one file out of an image without running anything.
 	ReadImageFile(ctx context.Context, image, path string) ([]byte, error)
+	ReadImageArchive(ctx context.Context, image, path string) ([]byte, error)
 	Start(ctx context.Context, spec ContainerSpec) error
 	Stop(ctx context.Context, name string) error
 	Inspect(ctx context.Context, name string) (ContainerInfo, error)
@@ -242,6 +245,12 @@ func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 	if err := d.json(ctx, http.MethodPost, "/containers/create?name="+url.QueryEscape(spec.Name), body, &created); err != nil {
 		return fmt.Errorf("create %s: %w", spec.Name, err)
 	}
+	for directory, archive := range spec.Archives {
+		query := url.Values{"path": []string{directory}}
+		if _, err := d.raw(ctx, http.MethodPut, "/containers/"+created.ID+"/archive?"+query.Encode(), archive); err != nil {
+			return fmt.Errorf("copy assets to %s:%s: %w", spec.Name, directory, errors.Join(err, d.removeCreatedContainer(created.ID)))
+		}
+	}
 	if err := d.json(ctx, http.MethodPost, "/containers/"+created.ID+"/start", map[string]any{}, nil); err != nil {
 		cleanupErr := d.removeCreatedContainer(created.ID)
 		if cleanupErr != nil {
@@ -256,6 +265,14 @@ func (d DockerEngine) Start(ctx context.Context, spec ContainerSpec) error {
 // API, so this creates a container that is never started, copies the file out
 // of it the way `docker cp` does, and removes it. Nothing runs.
 func (d DockerEngine) ReadImageFile(ctx context.Context, image, path string) ([]byte, error) {
+	raw, err := d.ReadImageArchive(ctx, image, path)
+	if err != nil {
+		return nil, err
+	}
+	return firstArchiveFile(raw)
+}
+
+func (d DockerEngine) ReadImageArchive(ctx context.Context, image, path string) (raw []byte, err error) {
 	var created struct {
 		ID string `json:"Id"`
 	}
@@ -265,15 +282,11 @@ func (d DockerEngine) ReadImageFile(ctx context.Context, image, path string) ([]
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		_ = d.deleteContainer(cleanupCtx, created.ID)
+		err = errors.Join(err, d.deleteContainer(cleanupCtx, created.ID))
 	}()
 	query := url.Values{}
 	query.Set("path", path)
-	raw, err := d.raw(ctx, http.MethodGet, "/containers/"+created.ID+"/archive?"+query.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	return firstArchiveFile(raw)
+	return d.raw(ctx, http.MethodGet, "/containers/"+created.ID+"/archive?"+query.Encode(), nil)
 }
 
 func firstArchiveFile(raw []byte) ([]byte, error) {
@@ -419,7 +432,11 @@ func (d DockerEngine) json(ctx context.Context, method, path string, body any, d
 
 func (d DockerEngine) raw(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var reader io.Reader
-	if body != nil {
+	contentType := "application/json"
+	if archive, ok := body.([]byte); ok {
+		reader = bytes.NewReader(archive)
+		contentType = "application/x-tar"
+	} else if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
@@ -431,7 +448,7 @@ func (d DockerEngine) raw(ctx context.Context, method, path string, body any) ([
 		return nil, err
 	}
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := d.HTTP.Do(req)
 	if err != nil {

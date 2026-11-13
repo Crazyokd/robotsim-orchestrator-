@@ -16,18 +16,22 @@ import (
 )
 
 // endpoint 是本车端能接上的世界挂接。世界不必来自某个具体包，只要给出
-// 连接三要素，以及是否为这台车 spawn 了相机。
+// 连接三要素、相机选择和可在车端相同路径展开的世界资产。
 type endpoint interface {
 	Endpoint() (ip, partition, topicPrefix string)
 	HasCameras() bool
+	WorldAssets() (directory, sdfPath string, archive []byte)
 }
 
 // WorldLink 是启动一台车要用的挂接副本。
 type WorldLink struct {
-	Cameras     bool
-	IP          string
-	Partition   string
-	TopicPrefix string
+	Cameras        bool
+	IP             string
+	Partition      string
+	TopicPrefix    string
+	AssetDirectory string
+	WorldPath      string
+	Archive        []byte
 }
 
 func linkFrom(attachment orchestrator.Attachment) (WorldLink, error) {
@@ -42,11 +46,18 @@ func linkFrom(attachment orchestrator.Attachment) (WorldLink, error) {
 	if ip == "" || partition == "" || prefix == "" {
 		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q: endpoint is incomplete", attachment.Kind())
 	}
+	directory, worldPath, archive := shaped.WorldAssets()
+	if !filepath.IsAbs(directory) || !filepath.IsAbs(worldPath) || len(archive) == 0 {
+		return WorldLink{}, fmt.Errorf("easygo vehicle cannot attach to world kind %q: world assets are incomplete", attachment.Kind())
+	}
 	return WorldLink{
-		Cameras:     shaped.HasCameras(),
-		IP:          ip,
-		Partition:   partition,
-		TopicPrefix: prefix,
+		Cameras:        shaped.HasCameras(),
+		IP:             ip,
+		Partition:      partition,
+		TopicPrefix:    prefix,
+		AssetDirectory: directory,
+		WorldPath:      worldPath,
+		Archive:        archive,
 	}, nil
 }
 
@@ -130,11 +141,6 @@ func (f Factory) ValidateStart(ctx context.Context, session contract.Session, ra
 			return err
 		}
 	}
-	if len(f.Options.GzGuiRobots) > 0 {
-		if _, err := gzGuiAssetBind(f.AssetsDir); err != nil {
-			return err
-		}
-	}
 	if _, err := f.Engine.ImageID(ctx, f.Options.AppImage); err != nil {
 		return fmt.Errorf("vehicle image %q: %w", f.Options.AppImage, err)
 	}
@@ -159,7 +165,7 @@ func (f Factory) New(_ context.Context, session contract.Session, robot contract
 		SessionName: f.SessionName,
 		Slot:        f.Slot,
 	}
-	// 裸世界（无 bundle）没有车端节：不灌图、不定位，世界 SDF 交接照旧。
+	// Bare worlds skip map provisioning; assets still come from the world attachment.
 	if len(rawSection) > 0 {
 		section, err := parseSection(rawSection)
 		if err != nil {

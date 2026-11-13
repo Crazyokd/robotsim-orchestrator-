@@ -1,6 +1,7 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -47,20 +48,19 @@ type Body struct {
 }
 
 type Process struct {
-	AssetsRoot string
-	ModelPath  string
-	ReadyPath  string
-	Transport  Transport
-	WorldName  string
-	Bodies     []Body
+	WorldPath string
+	ModelPath string
+	ReadyPath string
+	Transport Transport
+	Bodies    []Body
 }
 
 func (p Process) Run(ctx context.Context) error {
 	if p.Transport == nil {
 		return fmt.Errorf("world transport is required")
 	}
-	if strings.TrimSpace(p.WorldName) == "" {
-		return fmt.Errorf("world name must not be empty")
+	if strings.TrimSpace(p.WorldPath) == "" {
+		return fmt.Errorf("world SDF path must not be empty")
 	}
 	if err := removeReady(p.ReadyPath); err != nil {
 		return err
@@ -68,13 +68,12 @@ func (p Process) Run(ctx context.Context) error {
 	defer func() {
 		_ = removeReady(p.ReadyPath)
 	}()
-	// 世界 SDF 在 bundle 目录布局里的位置：worlds/<world>/gazebo/world.sdf。
-	worldPath := filepath.Join(p.AssetsRoot, p.WorldName, "gazebo", "world.sdf")
+	worldPath := p.WorldPath
 	raw, err := os.ReadFile(worldPath)
 	if err != nil {
 		return fmt.Errorf("read world %s: %w", worldPath, err)
 	}
-	worldSDFName, err := sdfWorldName(raw)
+	worldSDFName, err := SDFWorldName(raw)
 	if err != nil {
 		return err
 	}
@@ -225,25 +224,56 @@ func removeReady(path string) error {
 	return nil
 }
 
-func sdfWorldName(raw []byte) (string, error) {
-	dec := xml.NewDecoder(strings.NewReader(string(raw)))
+// SDFWorldName validates a complete SDF document containing exactly one world.
+func SDFWorldName(raw []byte) (string, error) {
+	var sdf struct {
+		XMLName xml.Name `xml:"sdf"`
+		Worlds  []struct {
+			Name string `xml:"name,attr"`
+		} `xml:"world"`
+	}
+	dec := xml.NewDecoder(bytes.NewReader(raw))
 	for {
-		tok, err := dec.Token()
-		if err == io.EOF {
-			return "", fmt.Errorf("world name not found")
+		token, err := dec.Token()
+		if err != nil {
+			return "", err
+		}
+		if start, ok := token.(xml.StartElement); ok {
+			if err := dec.DecodeElement(&sdf, &start); err != nil {
+				return "", err
+			}
+			break
+		}
+		switch value := token.(type) {
+		case xml.Comment, xml.ProcInst:
+		case xml.CharData:
+			if strings.TrimSpace(string(value)) != "" {
+				return "", fmt.Errorf("unexpected text before world XML")
+			}
+		default:
+			return "", fmt.Errorf("unexpected token before world XML")
+		}
+	}
+	for {
+		token, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
 		}
 		if err != nil {
 			return "", err
 		}
-		start, ok := tok.(xml.StartElement)
-		if !ok || start.Name.Local != "world" {
-			continue
-		}
-		for _, a := range start.Attr {
-			if a.Name.Local == "name" && a.Value != "" {
-				return a.Value, nil
+		switch value := token.(type) {
+		case xml.Comment:
+		case xml.CharData:
+			if strings.TrimSpace(string(value)) != "" {
+				return "", fmt.Errorf("unexpected trailing world XML")
 			}
+		default:
+			return "", fmt.Errorf("unexpected trailing world XML")
 		}
-		return "", fmt.Errorf("world element missing name")
 	}
+	if len(sdf.Worlds) != 1 || strings.TrimSpace(sdf.Worlds[0].Name) == "" {
+		return "", fmt.Errorf("SDF must contain exactly one named world")
+	}
+	return sdf.Worlds[0].Name, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"git.standard-robots.com/yicao/sim/internal/assets"
@@ -25,6 +26,9 @@ func ParseSection(raw assets.Section) (Section, error) {
 	}
 	if strings.TrimSpace(section.SDF) == "" {
 		return Section{}, fmt.Errorf("worlds.%s section sdf must not be empty", Kind)
+	}
+	if !filepath.IsLocal(section.SDF) {
+		return Section{}, fmt.Errorf("worlds.%s sdf must stay inside its bundle: %q", Kind, section.SDF)
 	}
 	return section, nil
 }

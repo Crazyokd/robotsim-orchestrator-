@@ -91,12 +91,11 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 	readyRaw := make(chan []byte, 1)
 	wantPose := contract.Pose{X: 7.5, Y: 0.3, Z: 0.05, Yaw: math.Pi}
 	proc := Process{
-		AssetsRoot: worldsRoot,
-		ModelPath:  modelPath,
-		ReadyPath:  readyPath,
-		Transport:  transport,
-		WorldName:  "simple",
-		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: wantPose}},
+		WorldPath: filepath.Join(worldsRoot, "simple", "gazebo", "world.sdf"),
+		ModelPath: modelPath,
+		ReadyPath: readyPath,
+		Transport: transport,
+		Bodies:    []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: wantPose}},
 	}
 	// Cancel as soon as the ready file appears; Run blocks until ctx is done.
 	go func() {
@@ -155,12 +154,29 @@ func TestProcessSpawnsRobotsAndWritesReady(t *testing.T) {
 
 func TestProcessMissingWorldFails(t *testing.T) {
 	proc := Process{
-		AssetsRoot: t.TempDir(),
-		WorldName:  "missing",
-		Transport:  &fakeTransport{},
+		WorldPath: filepath.Join(t.TempDir(), "missing.sdf"),
+		Transport: &fakeTransport{},
 	}
 	if err := proc.Run(context.Background()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestProcessStartsTheExplicitSDFPath(t *testing.T) {
+	worlds, _, ready := fixture(t)
+	custom := filepath.Join(worlds, "simple", "custom.sdf")
+	if err := os.WriteFile(custom, []byte(`<sdf><world name="selected_scene"/></sdf>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("stop after world selection")
+	transport := &fakeTransport{server: make(chan error, 1), waitClock: func(context.Context) error { return wantErr }}
+	defer close(transport.server)
+	proc := Process{WorldPath: custom, ReadyPath: ready, Transport: transport}
+	if err := proc.Run(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("run error=%v", err)
+	}
+	if transport.started != custom {
+		t.Fatalf("started=%s, want %s", transport.started, custom)
 	}
 }
 
@@ -171,11 +187,10 @@ func TestProcessExitsWhenServerDiesBeforeClock(t *testing.T) {
 		waitClock: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
 	}
 	proc := Process{
-		AssetsRoot: worldsRoot,
-		ModelPath:  modelPath,
-		ReadyPath:  readyPath,
-		Transport:  transport,
-		WorldName:  "simple",
+		WorldPath: filepath.Join(worldsRoot, "simple", "gazebo", "world.sdf"),
+		ModelPath: modelPath,
+		ReadyPath: readyPath,
+		Transport: transport,
 	}
 	transport.server <- errors.New("gz sim exited: exit status 1\nmodel missing")
 	err := proc.Run(context.Background())
@@ -194,12 +209,11 @@ func TestProcessExitsWhenServerDiesAfterReady(t *testing.T) {
 		server: make(chan error, 1),
 	}
 	proc := Process{
-		AssetsRoot: worldsRoot,
-		ModelPath:  modelPath,
-		ReadyPath:  readyPath,
-		Transport:  transport,
-		WorldName:  "simple",
-		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
+		WorldPath: filepath.Join(worldsRoot, "simple", "gazebo", "world.sdf"),
+		ModelPath: modelPath,
+		ReadyPath: readyPath,
+		Transport: transport,
+		Bodies:    []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
 	}
 	go func() {
 		waitFile(t, readyPath, 5*time.Second)
@@ -219,12 +233,11 @@ func TestProcessStopsCleanlyWhenCancelled(t *testing.T) {
 	transport := &fakeTransport{}
 	ctx, cancel := context.WithCancel(context.Background())
 	proc := Process{
-		AssetsRoot: worldsRoot,
-		ModelPath:  modelPath,
-		ReadyPath:  readyPath,
-		Transport:  transport,
-		WorldName:  "simple",
-		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
+		WorldPath: filepath.Join(worldsRoot, "simple", "gazebo", "world.sdf"),
+		ModelPath: modelPath,
+		ReadyPath: readyPath,
+		Transport: transport,
+		Bodies:    []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
 	}
 	go func() {
 		waitFile(t, readyPath, 5*time.Second)
@@ -242,12 +255,11 @@ func TestProcessCancelsSimulationWhenEntityCreationFails(t *testing.T) {
 	worldsRoot, modelPath, readyPath := fixture(t)
 	transport := &fakeTransport{createErr: errors.New("spawn failed")}
 	proc := Process{
-		AssetsRoot: worldsRoot,
-		ModelPath:  modelPath,
-		ReadyPath:  readyPath,
-		Transport:  transport,
-		WorldName:  "simple",
-		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
+		WorldPath: filepath.Join(worldsRoot, "simple", "gazebo", "world.sdf"),
+		ModelPath: modelPath,
+		ReadyPath: readyPath,
+		Transport: transport,
+		Bodies:    []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
 	}
 	err := proc.Run(context.Background())
 	close(transport.server)
@@ -285,12 +297,11 @@ func TestProcessFailsWhenEntityNeverAppears(t *testing.T) {
 	entityWaitTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { entityWaitTimeout = restore })
 	proc := Process{
-		AssetsRoot: worldsRoot,
-		ModelPath:  modelPath,
-		ReadyPath:  readyPath,
-		Transport:  transport,
-		WorldName:  "simple",
-		Bodies:     []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
+		WorldPath: filepath.Join(worldsRoot, "simple", "gazebo", "world.sdf"),
+		ModelPath: modelPath,
+		ReadyPath: readyPath,
+		Transport: transport,
+		Bodies:    []Body{{Name: "robot1", TopicPrefix: "robot1", Pose: contract.Pose{Z: 0.05}}},
 	}
 	err := proc.Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "robot1") {

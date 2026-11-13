@@ -51,42 +51,47 @@ func (w DockerWorld) rosDomainID() int {
 }
 
 func (w DockerWorld) ValidateStart(ctx context.Context, session contract.Session, rawSection assets.Section) error {
+	_, err := w.prepareStart(ctx, session, rawSection)
+	return err
+}
+
+func (w DockerWorld) prepareStart(ctx context.Context, session contract.Session, rawSection assets.Section) (worldAssets, error) {
 	if err := session.Validate(); err != nil {
-		return err
+		return worldAssets{}, err
 	}
 	if err := w.Options.Validate(); err != nil {
-		return err
+		return worldAssets{}, err
 	}
 	if w.Slot < 0 || w.Slot > 2 {
-		return fmt.Errorf("session slot %d exceeds gazebo ROS domain limit 2", w.Slot)
+		return worldAssets{}, fmt.Errorf("session slot %d exceeds gazebo ROS domain limit 2", w.Slot)
 	}
-	// worlds.gazebo 节严格解析：坏节直接失败。SDF 路径目前仍按目录约定
-	// 解析（世界进程在容器内读），节的运行时消费随世界进程接线演进。
+	// Reject an invalid declared path before reading the image assets.
 	if len(rawSection) > 0 {
 		if _, err := ParseSection(rawSection); err != nil {
-			return err
+			return worldAssets{}, err
 		}
 	}
 	for _, index := range w.Options.CameraRobots {
 		if index < 1 || index > len(session.Robots) {
-			return fmt.Errorf("cameras robot %d outside robot count %d", index, len(session.Robots))
+			return worldAssets{}, fmt.Errorf("cameras robot %d outside robot count %d", index, len(session.Robots))
 		}
 	}
 	if _, err := w.Engine.ImageID(ctx, w.Options.EnvImage); err != nil {
-		return fmt.Errorf("world image %q: %w", w.Options.EnvImage, err)
+		return worldAssets{}, fmt.Errorf("world image %q: %w", w.Options.EnvImage, err)
 	}
-	return nil
+	return w.loadAssets(ctx, session, rawSection)
 }
 
 func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSection assets.Section) ([]orchestrator.Attachment, error) {
-	if err := w.ValidateStart(ctx, session, rawSection); err != nil {
+	world, err := w.prepareStart(ctx, session, rawSection)
+	if err != nil {
 		return nil, err
 	}
 	rawSession, err := json.Marshal(session)
 	if err != nil {
 		return nil, err
 	}
-	worldCmd := []string{"--session", string(rawSession)}
+	worldCmd := []string{"--session", string(rawSession), "--world-sdf", world.path}
 	if len(w.Options.CameraRobots) > 0 {
 		cameraRobots := make([]string, 0, len(w.Options.CameraRobots))
 		for _, index := range w.Options.CameraRobots {
@@ -114,7 +119,9 @@ func (w DockerWorld) Start(ctx context.Context, session contract.Session, rawSec
 	}
 	attachments := make([]orchestrator.Attachment, 0, len(session.Robots))
 	for _, robot := range session.Robots {
-		attachments = append(attachments, attachmentFor(robot, wantsCamera(w.Options.CameraRobots, robot.Index), w.partition()))
+		attachment := attachmentFor(robot, wantsCamera(w.Options.CameraRobots, robot.Index), w.partition())
+		attachment.SDFPath, attachment.Archive = world.path, world.archive
+		attachments = append(attachments, attachment)
 	}
 	return attachments, nil
 }

@@ -2,11 +2,8 @@ package easygo
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 
-	"git.standard-robots.com/yicao/sim/internal/assets"
 	"git.standard-robots.com/yicao/sim/internal/contract"
 )
 
@@ -42,7 +39,7 @@ func launchArgs(robot contract.Robot, topicPrefix string, runtime vehicleRuntime
 	}
 }
 
-func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRuntime, link WorldLink) map[string]string {
+func appEnv(robot contract.Robot, runtime vehicleRuntime, link WorldLink) map[string]string {
 	return map[string]string{
 		"ROS_DOMAIN_ID":                 strconv.Itoa(runtime.rosDomainID),
 		"ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
@@ -56,7 +53,7 @@ func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRunti
 		"PARAM_CFG_DIR":                 appRegistryDir,
 		"PARAM_DB_PATH":                 runtime.runtimeRoot + "/db/cfg.db3",
 		"DATABASE_URL":                  "sqlite://" + runtime.runtimeRoot + "/db/easygo.db?mode=rwc",
-		"EASYGO_SIM_WORLD":              session.World + ".sdf",
+		"EASYGO_SIM_WORLD":              link.WorldPath,
 		"EASYGO_SIM_APP_ROOT":           runtime.runtimeRoot + "/easygo-app",
 		"EASYGO_WEBAPP_DIR":             runtime.runtimeRoot + "/webapp",
 		"GZ_SIM_RESOURCE_PATH":          appGZResourcePath,
@@ -69,23 +66,6 @@ func appEnv(robot contract.Robot, session contract.Session, runtime vehicleRunti
 		// owns PORT (the app's HTTP port); only mDNS needs a per-robot offset.
 		"MDNS_PORT": strconv.Itoa(runtime.mdnsPort),
 	}
-}
-
-// gzGuiAssetBind mounts this checkout's deploy/assets at /opt/simenv so the
-// vehicle-side Gazebo GUI can read the world props. The world SDF includes
-// model://black_pallet and model://cage1, which the world server resolves to
-// /opt/simenv/models/... at load time -- absolute paths it then sends in the
-// scene message. Those exist only inside the environment container, so a GUI
-// without this mount renders the world without its props.
-//
-// 资产目录解析走 internal/assets（exe 相对）；要开 gz-gui 而资产不在场
-// 是错误——静默少挂一个目录，GUI 渲染出来的世界会缺道具还找不到原因。
-func gzGuiAssetBind(assetsDir string) (string, error) {
-	root := assets.Path(assetsDir)
-	if _, err := os.Stat(filepath.Join(root, "models")); err != nil {
-		return "", fmt.Errorf("gz-gui needs the world assets (models/): %w", err)
-	}
-	return root + ":/opt/simenv", nil
 }
 
 func cycloneDDSURI() string {

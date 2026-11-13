@@ -54,14 +54,11 @@ func (v Vehicle) Start(ctx context.Context) error {
 	useRviz := v.Options.wantsRviz(v.Robot.Index)
 	useGzGui := v.Options.wantsGzGui(v.Robot.Index)
 	cmd := append([]string{"ros2", "launch", "easygo_sim_bringup", "sim_easygo.launch.py"}, launchArgs(v.Robot, v.Link.TopicPrefix, runtime, useRviz, useGzGui, v.Link.Cameras)...)
+	cmd = append(cmd, "world:="+v.Link.WorldPath)
 	var binds []string
 	if prefix := strings.TrimSpace(v.Options.DataVolumePrefix); prefix != "" {
-		// Volume 形态：daemon 自管数据卷，首次挂载继承镜像 /sros（0777，车端
-		// std 可写）。registry 补丁与世界 SDF handover 都依赖宿主机路径绑定
-		// （daemon 与 simenv 不共享文件系统时，宿主上路径不存在，文件 bind 会
-		// 被 daemon 建成目录再挂到文件目标而失败），此形态下一律不挂——车辆
-		// 身份由 launch 的 SERIAL_NUMBER 播种（单车无 sync 端口冲突），世界
-		// SDF 用车端镜像自带那份（与环境 pinned 资产同源）。
+		// The daemon owns the writable volume. Sync defaults still require a host
+		// bind, hence the single-robot/slot-0 guard; world assets use the API archive.
 		if v.SessionName != "" {
 			prefix += "-" + v.SessionName
 		}
@@ -86,16 +83,6 @@ func (v Vehicle) Start(ctx context.Context) error {
 			return err
 		}
 		binds = append([]string{hostSros + ":" + runtimeRoot}, syncConfigBinds...)
-		if handover := worldHandoverBind(v.AssetsDir, v.Session.World); handover != "" {
-			binds = append(binds, handover)
-		}
-	}
-	if useGzGui {
-		bind, err := gzGuiAssetBind(v.AssetsDir)
-		if err != nil {
-			return err
-		}
-		binds = append(binds, bind)
 	}
 	labels := map[string]string{
 		docker.LabelManaged: "true",
@@ -111,16 +98,17 @@ func (v Vehicle) Start(ctx context.Context) error {
 		gpu = docker.HostGPU()
 	}
 	if err := v.Engine.Start(ctx, docker.ContainerSpec{
-		Name:    v.containerName(),
-		Image:   v.Options.AppImage,
-		Command: cmd,
-		Env:     appEnv(v.Robot, v.Session, runtime, v.Link),
-		Binds:   binds,
-		Network: "host",
-		Ipc:     "host",
-		Devices: gpu.Devices,
-		Runtime: gpu.Runtime,
-		Labels:  labels,
+		Name:     v.containerName(),
+		Image:    v.Options.AppImage,
+		Command:  cmd,
+		Env:      appEnv(v.Robot, runtime, v.Link),
+		Binds:    binds,
+		Archives: map[string][]byte{v.Link.AssetDirectory: v.Link.Archive},
+		Network:  "host",
+		Ipc:      "host",
+		Devices:  gpu.Devices,
+		Runtime:  gpu.Runtime,
+		Labels:   labels,
 	}); err != nil {
 		return err
 	}

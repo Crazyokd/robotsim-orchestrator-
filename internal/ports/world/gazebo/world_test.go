@@ -15,11 +15,19 @@ import (
 )
 
 type fakeEngine struct {
-	started []docker.ContainerSpec
-	stopped []string
-	infos   map[string]docker.ContainerInfo
-	ready   string
-	execErr error
+	imageArchive []byte
+	started      []docker.ContainerSpec
+	stopped      []string
+	infos        map[string]docker.ContainerInfo
+	ready        string
+	execErr      error
+}
+
+func (f *fakeEngine) ReadImageArchive(context.Context, string, string) ([]byte, error) {
+	if f.imageArchive != nil {
+		return f.imageArchive, nil
+	}
+	return worldArchive(map[string]string{"simenv/worlds/simple/gazebo/world.sdf": `<sdf><world name="map_world"/></sdf>`})
 }
 
 func (f *fakeEngine) ImageID(_ context.Context, ref string) (string, error) {

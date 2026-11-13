@@ -1,6 +1,8 @@
 package easygo
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -23,6 +25,31 @@ type fakeEngine struct {
 	started    []docker.ContainerSpec
 	stopped    []string
 	infos      map[string]docker.ContainerInfo
+}
+
+func fixtureWorldArchive() ([]byte, error) {
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	for name, body := range map[string]string{
+		"simenv/worlds/simple/gazebo/world.sdf": `<sdf><world name="map_world"/></sdf>`,
+		"simenv/worlds/simple/custom/scene.sdf": `<sdf><world name="custom_scene"/></sdf>`,
+		"simenv/models/prop/mesh.dae":           "world prop",
+	} {
+		if err := w.WriteHeader(&tar.Header{Name: name, Size: int64(len(body)), Mode: 0o644}); err != nil {
+			return nil, err
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			return nil, err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (f *fakeEngine) ReadImageArchive(context.Context, string, string) ([]byte, error) {
+	return fixtureWorldArchive()
 }
 
 // fakeSyncRegistry mirrors the registry file the runtime image ships: its default
@@ -108,8 +135,13 @@ func oneRobotSession(t *testing.T) contract.Session {
 	return session
 }
 
-func testLink(robot contract.Robot) gazebo.Attachment {
-	return gazebo.Attachment{IP: gazebo.GZIP, Partition: gazebo.Partition, TopicPrefix: robot.Name}
+func testLink(t *testing.T, robot contract.Robot) gazebo.Attachment {
+	t.Helper()
+	archive, err := fixtureWorldArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gazebo.Attachment{IP: gazebo.GZIP, Partition: gazebo.Partition, TopicPrefix: robot.Name, SDFPath: "/opt/simenv/worlds/simple/gazebo/world.sdf", Archive: archive}
 }
 
 func TestNamedSessionShiftsContainerAndPorts(t *testing.T) {
@@ -147,7 +179,7 @@ func TestNamedSessionsKeepSeparateDataAcrossSlotReuse(t *testing.T) {
 				{name: "alpha", slot: 1, port: "35354"},
 			} {
 				factory := Factory{Engine: engine, Options: options, SessionName: tc.name, Slot: tc.slot}
-				vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+				vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(t, session.Robots[0]), nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -206,7 +238,7 @@ func TestNamedVolumeFollowsSessionNameAcrossSlotReuse(t *testing.T) {
 			Engine: engine, SessionName: name,
 			Options: Options{AppImage: "runtime-sim:tag", DataVolumePrefix: "ci-1"},
 		}
-		vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+		vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(t, session.Robots[0]), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -246,7 +278,7 @@ func TestStartRejectsSlotResourceOverflow(t *testing.T) {
 			engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
 			session := contract.Session{World: "simple", Robots: tc.robots}
 			factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataRoot: t.TempDir()}, Slot: tc.slot}
-			vehicle, err := factory.New(context.Background(), session, tc.robots[0], testLink(tc.robots[0]), nil)
+			vehicle, err := factory.New(context.Background(), session, tc.robots[0], testLink(t, tc.robots[0]), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -262,7 +294,7 @@ func TestStartRejectsSlotResourceOverflow(t *testing.T) {
 
 func TestFactoryNewReadsTheGazeboAttachment(t *testing.T) {
 	factory := Factory{Engine: &fakeEngine{infos: map[string]docker.ContainerInfo{}}}
-	port, err := factory.New(context.Background(), oneRobotSession(t), contract.Robot{Index: 1, Name: "robot1"}, testLink(contract.Robot{Index: 1, Name: "robot1"}), nil)
+	port, err := factory.New(context.Background(), oneRobotSession(t), contract.Robot{Index: 1, Name: "robot1"}, testLink(t, contract.Robot{Index: 1, Name: "robot1"}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +324,7 @@ func TestVehicleStartConfiguresTheContainer(t *testing.T) {
 	session := oneRobotSession(t)
 	factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataRoot: t.TempDir()}}
 	// 相机配对来自世界的挂接信息（gazebo.Attachment.Cameras），不是车端自己的配置。
-	link := testLink(session.Robots[0])
+	link := testLink(t, session.Robots[0])
 	link.Cameras = true
 	vehicle, err := factory.New(context.Background(), session, session.Robots[0], link, nil)
 	if err != nil {
@@ -382,7 +414,7 @@ func TestViewersArePerRobot(t *testing.T) {
 		},
 	}
 	for _, robot := range session.Robots {
-		vehicle, err := factory.New(context.Background(), session, robot, testLink(robot), nil)
+		vehicle, err := factory.New(context.Background(), session, robot, testLink(t, robot), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -435,7 +467,7 @@ func TestStartInitializesEachVehicleSyncRegistry(t *testing.T) {
 		Robots: []contract.Robot{{Index: 1, Name: "robot1"}, {Index: 2, Name: "robot2"}},
 	}
 	for _, robot := range session.Robots {
-		vehicle, err := factory.New(context.Background(), session, robot, testLink(robot), nil)
+		vehicle, err := factory.New(context.Background(), session, robot, testLink(t, robot), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -507,7 +539,7 @@ func TestStartEnablesMultiAMRPeerLink(t *testing.T) {
 	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
 	factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataRoot: t.TempDir()}}
 	session := oneRobotSession(t)
-	vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+	vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(t, session.Robots[0]), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,25 +558,32 @@ func TestStartEnablesMultiAMRPeerLink(t *testing.T) {
 	}
 }
 
-// 过渡态：世界由环境提供，而车端 launch 按自己镜像的 worlds 目录校验世界名
-// （sim_nav2.launch.py 的 _world_path）。把环境这份 SDF 只读挂进车端容器，
-// 世界就只有一份文件。easygo 侧接受显式世界路径后（合同 §5 第 1 条）一起删。
-func TestStartHandsTheWorldFileToTheAppContainer(t *testing.T) {
+func TestStartCopiesWorldAssetsFromAttachment(t *testing.T) {
 	dir := t.TempDir()
 	writeWorldSDF(t, dir, "corridor")
 	engine := &fakeEngine{infos: map[string]docker.ContainerInfo{}}
 	factory := Factory{Engine: engine, Options: Options{AppImage: "runtime-sim:tag", DataRoot: t.TempDir()}, AssetsDir: dir}
-	session := contract.Session{World: "corridor", Robots: []contract.Robot{{Index: 1, Name: "robot1"}}}
-	vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+	session := oneRobotSession(t)
+	link := testLink(t, session.Robots[0])
+	link.SDFPath = "/opt/simenv/worlds/simple/custom/scene.sdf"
+	vehicle, err := factory.New(context.Background(), session, session.Robots[0], link, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := vehicle.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(dir, "worlds", "corridor", "gazebo", "world.sdf") + ":" + appWorldsDir + "/corridor.sdf:ro"
-	if !slices.Contains(engine.started[0].Binds, want) {
-		t.Fatalf("binds=%v missing the world handover", engine.started[0].Binds)
+	spec := engine.started[0]
+	if !bytes.Equal(spec.Archives["/opt"], link.Archive) {
+		t.Fatal("vehicle did not receive world asset archive")
+	}
+	if spec.Env["EASYGO_SIM_WORLD"] != link.SDFPath || !slices.Contains(spec.Command, "world:="+link.SDFPath) {
+		t.Fatalf("world path not explicit: %+v", spec)
+	}
+	for _, bind := range spec.Binds {
+		if strings.Contains(bind, "worlds/") || strings.HasSuffix(bind, ":/opt/simenv") {
+			t.Fatalf("host world assets still bound: %s", bind)
+		}
 	}
 }
 
@@ -562,7 +601,7 @@ func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
 		AssetsDir: dir,
 	}
 	session := contract.Session{World: "simple", Robots: []contract.Robot{{Index: 1, Name: "robot1"}}}
-	vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(session.Robots[0]), nil)
+	vehicle, err := factory.New(context.Background(), session, session.Robots[0], testLink(t, session.Robots[0]), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,6 +610,9 @@ func TestStartWithDataVolumePrefixUsesNamedVolumeOnly(t *testing.T) {
 	}
 	if got, want := engine.started[0].Binds, []string{"ci-1-robot1:/sros"}; !slices.Equal(got, want) {
 		t.Fatalf("binds=%v, want exactly %v", got, want)
+	}
+	if len(engine.started[0].Archives["/opt"]) == 0 {
+		t.Fatal("named-volume mode lost the world assets")
 	}
 	if _, err := os.Stat(filepath.Join(dataRoot, "robot1")); !os.IsNotExist(err) {
 		t.Fatalf("volume form must not stage host dirs under %s: %v", dataRoot, err)
@@ -603,7 +645,7 @@ func TestStartRejectsParallelNamedVolumeResources(t *testing.T) {
 				SessionName: "session",
 				Slot:        tc.slot,
 			}
-			vehicle, err := factory.New(context.Background(), session, tc.robots[0], testLink(tc.robots[0]), nil)
+			vehicle, err := factory.New(context.Background(), session, tc.robots[0], testLink(t, tc.robots[0]), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -614,52 +656,6 @@ func TestStartRejectsParallelNamedVolumeResources(t *testing.T) {
 				t.Fatalf("named-volume guard started containers: %v", engine.started)
 			}
 		})
-	}
-}
-
-func TestWorldHandoverBindSkipsWorldsTheEnvironmentDoesNotShip(t *testing.T) {
-	dir := t.TempDir()
-	writeWorldSDF(t, dir, "corridor")
-	if bind := worldHandoverBind(dir, "simple"); bind != "" {
-		t.Fatalf("unexpected handover for a world the environment does not ship: %s", bind)
-	}
-	bind := worldHandoverBind(dir, "corridor")
-	host, _, ok := strings.Cut(bind, ":")
-	if !ok || !strings.HasSuffix(host, "/gazebo/world.sdf") {
-		t.Fatalf("handover bind=%q", bind)
-	}
-}
-
-func TestWorldHandoverBindUsesAnAbsoluteHostPath(t *testing.T) {
-	dir := t.TempDir()
-	writeWorldSDF(t, dir, "corridor")
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(previous) })
-	// 相对的资产目录：读文件没问题，但挂载源必须被解析成绝对路径，否则 Docker 拒绝创建容器。
-	bind := worldHandoverBind("worlds-assets", "corridor")
-	if bind != "" {
-		t.Fatalf("expected no handover when the world file is not under the assets dir: %s", bind)
-	}
-	target := filepath.Join(dir, "worlds-assets", "worlds", "corridor", "gazebo")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(dir, "worlds", "corridor", "gazebo", "world.sdf"), filepath.Join(target, "world.sdf")); err != nil {
-		t.Fatal(err)
-	}
-	bind = worldHandoverBind("worlds-assets", "corridor")
-	host, _, ok := strings.Cut(bind, ":")
-	if !ok {
-		t.Fatalf("bind=%q", bind)
-	}
-	if !filepath.IsAbs(host) {
-		t.Fatalf("host side of the bind is relative: %q", bind)
 	}
 }
 
