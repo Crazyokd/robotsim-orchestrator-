@@ -133,6 +133,11 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		return Status{}, err
 	}
 	if o.usingRegistry() {
+		lock, err := lockSessionChanges()
+		if err != nil {
+			return Status{}, err
+		}
+		defer lock.Close()
 		records, err := loadSessions()
 		if err != nil {
 			return Status{}, err
@@ -261,6 +266,11 @@ func (o Orchestrator) StopSession(ctx context.Context, name string) error {
 	if !o.usingRegistry() {
 		return o.stopInjected(ctx)
 	}
+	lock, err := lockSessionChanges()
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	records, err := loadSessions()
 	if err != nil {
 		return err

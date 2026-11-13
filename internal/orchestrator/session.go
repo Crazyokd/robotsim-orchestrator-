@@ -3,11 +3,13 @@ package orchestrator
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -34,6 +36,30 @@ func sessionMarkerPath() (string, error) {
 		return "", fmt.Errorf("resolve user cache dir: %w", err)
 	}
 	return filepath.Join(cacheDir, "simenv", "session.json"), nil
+}
+
+// lockSessionChanges guards slot allocation, lifecycle changes and registry writes.
+// Keep the lock file in place: closing the descriptor releases the lock.
+func lockSessionChanges() (*os.File, error) {
+	path, err := sessionMarkerPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create session marker dir: %w", err)
+	}
+	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open session lock %s: %w", path, err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another session change is in progress; retry when it completes")
+		}
+		return nil, fmt.Errorf("lock session marker %s: %w", path, err)
+	}
+	return file, nil
 }
 
 func loadSessions() ([]sessionRecord, error) {
