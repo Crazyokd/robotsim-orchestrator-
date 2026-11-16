@@ -78,6 +78,30 @@ func TestParseEntityPoseFailsWhenNameIsMissing(t *testing.T) {
 	}
 }
 
+func TestParseEntityPoseReadsLatestMatchingSample(t *testing.T) {
+	raw := `{"pose":[{"name":"robot1","position":{"x":1},"orientation":{"w":1}}]}
+{"pose":[{"name":"robot1","position":{"x":2},"orientation":{"w":1}}]}
+{"pose":[{"name":"robot2","position":{"x":3},"orientation":{"w":1}}]}`
+	pose, err := ParseEntityPose(raw, "robot1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pose.X != 2 {
+		t.Fatalf("pose=%+v, want latest robot1 sample", pose)
+	}
+}
+
+func TestParseEntityPoseRejectsMalformedStream(t *testing.T) {
+	valid := `{"pose":[{"name":"robot1","orientation":{"w":1}}]}`
+	for _, raw := range []string{"", "{", valid + "\n{", valid + "\nnoise", valid + "\n[]", valid + "\nnull"} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := ParseEntityPose(raw, "robot1"); err == nil {
+				t.Fatal("expected malformed stream to fail")
+			}
+		})
+	}
+}
+
 func TestSetPoseCommandCarriesYaw(t *testing.T) {
 	cmd := SetPoseCommand("simple", "robot1", contract.Pose{X: 3, Y: 1, Z: 0.05, Yaw: math.Pi})
 	req := cmd[len(cmd)-1]

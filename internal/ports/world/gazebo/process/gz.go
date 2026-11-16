@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os/exec"
 	"strings"
@@ -152,24 +153,39 @@ type poseInfo struct {
 	} `json:"pose"`
 }
 
-// ParseEntityPose 从 pose/info JSON 取出命名实体。实体不在就失败。
+// ParseEntityPose 从 pose/info JSON 消息流取出命名实体的最新位姿。
 func ParseEntityPose(raw, name string) (contract.Pose, error) {
-	var info poseInfo
-	if err := json.Unmarshal([]byte(raw), &info); err != nil {
-		return contract.Pose{}, fmt.Errorf("decode pose info: %w", err)
-	}
-	for _, item := range info.Pose {
-		if item.Name != name {
-			continue
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	var pose contract.Pose
+	found := false
+	for {
+		var info *poseInfo
+		if err := decoder.Decode(&info); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return contract.Pose{}, fmt.Errorf("decode pose info: %w", err)
 		}
-		return contract.Pose{
-			X:   item.Position.X,
-			Y:   item.Position.Y,
-			Z:   item.Position.Z,
-			Yaw: yawFromQuaternion(item.Orientation.X, item.Orientation.Y, item.Orientation.Z, item.Orientation.W),
-		}, nil
+		if info == nil {
+			return contract.Pose{}, fmt.Errorf("decode pose info: expected an object")
+		}
+		for _, item := range info.Pose {
+			if item.Name != name {
+				continue
+			}
+			pose = contract.Pose{
+				X:   item.Position.X,
+				Y:   item.Position.Y,
+				Z:   item.Position.Z,
+				Yaw: yawFromQuaternion(item.Orientation.X, item.Orientation.Y, item.Orientation.Z, item.Orientation.W),
+			}
+			found = true
+		}
 	}
-	return contract.Pose{}, fmt.Errorf("entity %s is not in pose info", name)
+	if !found {
+		return contract.Pose{}, fmt.Errorf("entity %s is not in pose info", name)
+	}
+	return pose, nil
 }
 
 // AssertSetPoseOK 要求 set_pose 回 true。文本或 JSON 都行。
