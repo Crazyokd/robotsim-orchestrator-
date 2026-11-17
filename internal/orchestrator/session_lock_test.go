@@ -27,12 +27,35 @@ func TestSessionChangeProcessHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := newRegistryOrchestrator(t, t.TempDir())
-	if action == "start" {
+	name := "alpha"
+	other := strings.HasSuffix(action, "-other")
+	if other {
+		name = "contender"
+	}
+	if strings.HasPrefix(action, "start") {
 		_, err = r.Start(context.Background(), contract.StartConfig{
-			World: "noworld", Robots: 1, WorldKind: "fake-world", VehicleKind: "fake", SessionName: "contender",
+			World: "noworld", Robots: 1, WorldKind: "fake-world", VehicleKind: "fake", SessionName: name,
 		})
 	} else {
-		err = r.StopSession(context.Background(), "existing")
+		err = r.StopSession(context.Background(), name)
+	}
+	if other {
+		if err != nil {
+			t.Fatalf("independent %s failed: %v", action, err)
+		}
+		records, err := loadSessions()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if action == "start-other" {
+			rec, ok := findSession(records, "contender")
+			if !ok || rec.Slot != 2 || len(records) != 3 {
+				t.Fatalf("independent start lost reservation: %+v", records)
+			}
+		} else if len(records) != 2 {
+			t.Fatalf("independent stop changed other rows: %+v", records)
+		}
+		return
 	}
 	if err == nil || !strings.Contains(err.Error(), "session change is in progress") {
 		t.Fatalf("concurrent %s must fail busy, got %v", action, err)
@@ -49,14 +72,14 @@ func TestSessionChangeProcessHelper(t *testing.T) {
 	}
 }
 
-func TestSessionChangesExcludeOtherProcesses(t *testing.T) {
+func TestSessionLifecycleLocksExcludeOnlyTheSameSession(t *testing.T) {
 	isolateMarker(t)
 	if err := saveSessionMarker(sessionRecord{Name: "existing", WorldKind: "fake-world", VehicleKind: "fake"}); err != nil {
 		t.Fatal(err)
 	}
 	r := newRegistryOrchestrator(t, t.TempDir())
 	r.Worlds["fake-world"] = func(contract.StartConfig) (WorldPort, error) {
-		for _, action := range []string{"start", "stop"} {
+		for _, action := range []string{"start", "stop", "start-other", "stop-other"} {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSessionChangeProcessHelper$")
 			cmd.Env = append(os.Environ(), "SIMENV_TEST_SESSION_CHANGE="+action)

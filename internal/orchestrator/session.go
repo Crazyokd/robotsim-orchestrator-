@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,28 +41,99 @@ func sessionMarkerPath() (string, error) {
 	return filepath.Join(cacheDir, "simenv", "session.json"), nil
 }
 
-// lockSessionChanges guards slot allocation, lifecycle changes and registry writes.
-// Keep the lock file in place: closing the descriptor releases the lock.
-func lockSessionChanges() (*os.File, error) {
+// 全局锁只保护槽位预留和名单写入；耗时生命周期操作使用具名会话锁。
+func lockSessionChanges(ctx context.Context) (*os.File, error) {
 	path, err := sessionMarkerPath()
 	if err != nil {
+		return nil, err
+	}
+	return lockSessionFile(ctx, path+".lock", true)
+}
+
+func lockSessionLifecycle(ctx context.Context, name string) (*os.File, error) {
+	if err := contract.ValidateName("session", name); err != nil {
+		return nil, err
+	}
+	path, err := sessionMarkerPath()
+	if err != nil {
+		return nil, err
+	}
+	return lockSessionFile(ctx, path+"."+name+".lock", false)
+}
+
+func lockSessionFile(ctx context.Context, path string, wait bool) (*os.File, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create session marker dir: %w", err)
 	}
-	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open session lock %s: %w", path, err)
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		file.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another session change is in progress; retry when it completes")
+	for {
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return file, nil
 		}
-		return nil, fmt.Errorf("lock session marker %s: %w", path, err)
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			file.Close()
+			return nil, fmt.Errorf("lock session marker %s: %w", path, err)
+		}
+		if !wait {
+			file.Close()
+			return nil, fmt.Errorf("session change is in progress: %s", path)
+		}
+		select {
+		case <-ctx.Done():
+			file.Close()
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	return file, nil
+}
+
+// 先登记槽位，再释放全局锁；返回的会话锁由调用者持有到启停结束。
+func reserveSession(ctx context.Context, cfg *contract.StartConfig, worldKind, vehicleKind string) (*os.File, *sessionRecord, error) {
+	for field, value := range map[string]string{"world kind": worldKind, "vehicle kind": vehicleKind} {
+		if err := contract.ValidateName(field, value); err != nil {
+			return nil, nil, err
+		}
+	}
+	registry, err := lockSessionChanges(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer registry.Close()
+	records, err := loadSessions()
+	if err != nil {
+		return nil, nil, err
+	}
+	if cfg.SessionName == "" {
+		cfg.SessionName, err = randomSessionName(records)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	lifecycle, err := lockSessionLifecycle(ctx, cfg.SessionName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if previous, ok := findSession(records, cfg.SessionName); ok {
+		cfg.Slot = previous.Slot
+		return lifecycle, &previous, nil
+	}
+	cfg.Slot = assignSlot(records)
+	records = append(records, sessionRecord{
+		Name: cfg.SessionName, WorldKind: worldKind, VehicleKind: vehicleKind,
+		Slot: cfg.Slot, StartedUnix: time.Now().UnixNano(),
+	})
+	if err := saveSessions(records); err != nil {
+		lifecycle.Close()
+		return nil, nil, err
+	}
+	return lifecycle, nil, nil
 }
 
 func loadSessions() ([]sessionRecord, error) {
@@ -153,7 +225,12 @@ func saveSessions(records []sessionRecord) error {
 	return nil
 }
 
-func upsertSession(rec sessionRecord) error {
+func upsertSession(ctx context.Context, rec sessionRecord) error {
+	lock, err := lockSessionChanges(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	records, err := loadSessions()
 	if err != nil {
 		return err
@@ -172,7 +249,12 @@ func upsertSession(rec sessionRecord) error {
 	return saveSessions(records)
 }
 
-func deleteSession(name string) error {
+func deleteSession(ctx context.Context, name string) error {
+	lock, err := lockSessionChanges(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	records, err := loadSessions()
 	if err != nil {
 		return err
@@ -258,7 +340,7 @@ func saveSessionMarker(rec sessionRecord) error {
 	if rec.StartedUnix == 0 {
 		rec.StartedUnix = time.Now().UnixNano()
 	}
-	return upsertSession(rec)
+	return upsertSession(context.Background(), rec)
 }
 
 // loadSessionMarker 读最近启动的会话；没有则返回 (nil, nil)。

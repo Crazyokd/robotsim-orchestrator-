@@ -118,7 +118,7 @@ func (o Orchestrator) assetsPath() string {
 	return assets.Path(o.assetsDir)
 }
 
-func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Status, error) {
+func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (result Status, returnErr error) {
 	if err := ctx.Err(); err != nil {
 		return Status{}, err
 	}
@@ -138,27 +138,40 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	if err != nil {
 		return Status{}, err
 	}
+	var previous *sessionRecord
+	releaseReservation := false
 	if o.usingRegistry() {
-		lock, err := lockSessionChanges()
+		worldKinds, vehicleKinds := []string(nil), []string(nil)
+		if bundle != nil {
+			for kind := range bundle.Worlds {
+				worldKinds = append(worldKinds, kind)
+			}
+			for kind := range bundle.Vehicles {
+				vehicleKinds = append(vehicleKinds, kind)
+			}
+		}
+		worldKind, err := resolveKind("world", "--world-kind", worldKinds, cfg.WorldKind)
+		if err != nil {
+			return Status{}, err
+		}
+		vehicleKind, err := resolveKind("vehicle", "--vehicle-kind", vehicleKinds, cfg.VehicleKind)
+		if err != nil {
+			return Status{}, err
+		}
+		lock, prior, err := reserveSession(ctx, &cfg, worldKind, vehicleKind)
 		if err != nil {
 			return Status{}, err
 		}
 		defer lock.Close()
-		records, err := loadSessions()
-		if err != nil {
-			return Status{}, err
-		}
-		if cfg.SessionName == "" {
-			cfg.SessionName, err = randomSessionName(records)
-			if err != nil {
-				return Status{}, err
+		previous = prior
+		releaseReservation = previous == nil
+		defer func() {
+			if releaseReservation {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				returnErr = errors.Join(returnErr, deleteSession(cleanupCtx, cfg.SessionName))
 			}
-		}
-		if previous, ok := findSession(records, cfg.SessionName); ok {
-			cfg.Slot = previous.Slot
-		} else {
-			cfg.Slot = assignSlot(records)
-		}
+		}()
 	} else if cfg.SessionName == "" {
 		cfg.SessionName, err = randomSessionName(nil)
 		if err != nil {
@@ -199,12 +212,8 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 	}
 	// 同名会话先停掉再开，其它名字留着。注入路径（测试）停掉工厂发现的全部车。
 	if o.usingRegistry() {
-		records, err := loadSessions()
-		if err != nil {
-			return Status{}, err
-		}
-		if _, ok := findSession(records, cfg.SessionName); ok {
-			if err := o.stopSession(ctx, cfg.SessionName); err != nil {
+		if previous != nil {
+			if err := o.stopSessionResources(ctx, *previous); err != nil {
 				return Status{}, err
 			}
 		}
@@ -226,12 +235,12 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		cleanupErr = errors.Join(cleanupErr, stopVehiclePorts(cleanupCtx, vehiclePorts))
 		cleanupErr = errors.Join(cleanupErr, worldPort.Stop(cleanupCtx))
 		if registered && cleanupErr == nil {
-			cleanupErr = deleteSession(cfg.SessionName)
+			cleanupErr = deleteSession(cleanupCtx, cfg.SessionName)
 		}
 		return cleanupErr
 	}
 	if o.usingRegistry() {
-		if err := upsertSession(sessionRecord{
+		if err := upsertSession(ctx, sessionRecord{
 			Name: cfg.SessionName, WorldKind: worldPort.Kind(), VehicleKind: vehicleFactory.Kind(),
 			Slot: cfg.Slot, StartedUnix: time.Now().UnixNano(),
 		}); err != nil {
@@ -239,6 +248,7 @@ func (o Orchestrator) Start(ctx context.Context, cfg contract.StartConfig) (Stat
 		}
 		registered = true
 	}
+	releaseReservation = false
 	attachments, err := worldPort.Start(ctx, session, worldSection)
 	if err != nil {
 		return Status{}, errors.Join(err, rollback())
@@ -292,11 +302,6 @@ func (o Orchestrator) StopSession(ctx context.Context, name string) error {
 	if !o.usingRegistry() {
 		return o.stopInjected(ctx)
 	}
-	lock, err := lockSessionChanges()
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
 	records, err := loadSessions()
 	if err != nil {
 		return err
@@ -311,6 +316,11 @@ func (o Orchestrator) StopSession(ctx context.Context, name string) error {
 	if _, ok := findSession(records, name); !ok {
 		return fmt.Errorf("no session %q", name)
 	}
+	lock, err := lockSessionLifecycle(ctx, name)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	return o.stopSession(ctx, name)
 }
 
@@ -457,6 +467,13 @@ func (o Orchestrator) stopSession(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("no session %q", name)
 	}
+	if err := o.stopSessionResources(ctx, rec); err != nil {
+		return err
+	}
+	return deleteSession(ctx, name)
+}
+
+func (o Orchestrator) stopSessionResources(ctx context.Context, rec sessionRecord) error {
 	cfg := portConfig(rec)
 	var stopErr error
 	if vehicleFactory, ferr := o.newVehicleFactory(rec.VehicleKind, cfg); ferr != nil {
@@ -471,10 +488,7 @@ func (o Orchestrator) stopSession(ctx context.Context, name string) error {
 	} else {
 		stopErr = errors.Join(stopErr, worldPort.Stop(ctx))
 	}
-	if stopErr != nil {
-		return stopErr
-	}
-	return deleteSession(name)
+	return stopErr
 }
 
 func portConfig(rec sessionRecord) contract.StartConfig {
