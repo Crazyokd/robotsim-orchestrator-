@@ -724,6 +724,32 @@ func TestRuntimePortArithmetic(t *testing.T) {
 	}
 }
 
+func TestStatusReportsEachSessionRobotFrontend(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, slot := range []int{0, 1, 2} {
+		for _, index := range []int{1, 2, 10} {
+			t.Run(fmt.Sprintf("slot%d-robot%d", slot, index), func(t *testing.T) {
+				v := Vehicle{SessionName: "alpha", Slot: slot, Robot: contract.Robot{Index: index, Name: fmt.Sprintf("robot%d", index)}}
+				v.Engine = &fakeEngine{infos: map[string]docker.ContainerInfo{
+					v.containerName(): {Name: v.containerName(), Running: true, Image: "runtime"},
+				}}
+				status, err := v.Status(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := fmt.Sprintf("http://127.0.0.1:%d", 18088+index*100+slot*10000)
+				if got := status.Detail["frontend"]; got != want {
+					t.Fatalf("frontend=%q, want %q", got, want)
+				}
+				if seen[status.Detail["frontend"]] {
+					t.Fatalf("frontend reused by another session or robot: %s", want)
+				}
+				seen[status.Detail["frontend"]] = true
+			})
+		}
+	}
+}
+
 func appLabels(name string, index int) map[string]string {
 	return map[string]string{
 		docker.LabelManaged: "true",

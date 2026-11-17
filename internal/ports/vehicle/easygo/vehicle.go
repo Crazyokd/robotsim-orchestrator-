@@ -133,7 +133,11 @@ func (v Vehicle) Status(ctx context.Context) (orchestrator.VehicleStatus, error)
 		Name:     v.Robot.Name,
 		Running:  info.Running,
 		Endpoint: fmt.Sprintf("http://127.0.0.1:%d", v.runtime().apiPort),
-		Detail:   map[string]string{"container": info.Name, "image": info.Image},
+		Detail: map[string]string{
+			"container": info.Name,
+			"frontend":  fmt.Sprintf("http://127.0.0.1:%d", v.runtime().frontendPort),
+			"image":     info.Image,
+		},
 	}, nil
 }
 

@@ -24,7 +24,7 @@ docker build -f deploy/Dockerfile -t simenv-world-gazebo:local .
 ./simenv stop
 ```
 
-`--world` / `--env-image` / `--app-image` 必填，没有默认值。可选 `--session <name>` 指定会话名；不写就生成一个，例如 `brisk-otter`，打在 start 的第一行。`./simenv status` 列出全部会话，`./simenv status <name>` 看这一路的车和端口。`./simenv stop` 停最近启动的那一路，`./simenv stop <name>` 停指定的那一路。
+`--world` / `--env-image` / `--app-image` 必填，没有默认值。可选 `--session <name>` 指定会话名；不写就生成一个，例如 `brisk-otter`，打在 start 的第一行。`./simenv status` 列出全部会话，`./simenv status <name>` 看这一路的车和端口。`./simenv stop` 停最近启动的那一路，`./simenv stop <name>` 停指定的那一路。 EasyGo 车端状态的 `endpoint` 是 API 地址，`frontend` Detail 是该会话、该车的实际前端 origin；消费者直接读取，不自行推算端口。
 
 点名控制时，会话名放在 flags 前：`./simenv pose alpha --robot 1`、`./simenv reset alpha --robot 1 --x 0 --y 0 --yaw 0`、`./simenv call alpha --robot 1 < request.bin`。同名重启保留原 slot；启动前由各 Port 校验选项、资产和镜像，再替换旧会话。启动失败但未清理干净的会话保留在名单中，可用 `stop <name>` 重试；一路状态查询失败仍显示其他会话，同时命令返回失败。
 
