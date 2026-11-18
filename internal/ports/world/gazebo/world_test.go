@@ -60,10 +60,7 @@ func (f *fakeEngine) Inspect(_ context.Context, name string) (docker.ContainerIn
 
 func (f *fakeEngine) Exec(_ context.Context, name string, cmd []string) (string, error) {
 	if name == WorldContainer && strings.Contains(strings.Join(cmd, " "), process.ReadyPath) {
-		if f.execErr != nil {
-			return "", f.execErr
-		}
-		return f.ready, nil
+		return f.ready, f.execErr
 	}
 	return "", nil
 }
@@ -230,16 +227,20 @@ func TestReadyEnforcesItsOwnTimeout(t *testing.T) {
 }
 
 func TestStatusReportsNotReadyWithoutError(t *testing.T) {
-	for _, output := range []string{
-		"",
-		"cat: /tmp/simenv/ready.json: No such file or directory",
+	missing := "cat: " + process.ReadyPath + ": No such file or directory"
+	for _, tc := range []struct {
+		name, output string
+		execErr      error
+	}{
+		{"empty report", "", nil},
+		{"missing report", missing, &docker.ExecError{ExitCode: 1, Output: missing}},
 	} {
-		t.Run(output, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			engine := &fakeEngine{
 				infos: map[string]docker.ContainerInfo{
 					WorldContainer: {Name: WorldContainer, Running: true},
 				},
-				ready: output,
+				ready: tc.output, execErr: tc.execErr,
 			}
 
 			status, err := (DockerWorld{Engine: engine}).Status(context.Background())
@@ -251,6 +252,30 @@ func TestStatusReportsNotReadyWithoutError(t *testing.T) {
 			}
 			if len(status.Ready.Robots) != 0 {
 				t.Fatalf("ready=%+v", status.Ready)
+			}
+		})
+	}
+}
+
+func TestStatusDoesNotHideOtherExecFailuresAsMissingReadiness(t *testing.T) {
+	missing := "cat: " + process.ReadyPath + ": No such file or directory"
+	for _, tc := range []struct {
+		name, output string
+		execErr      error
+	}{
+		{"permission denied", "cat: " + process.ReadyPath + ": Permission denied", &docker.ExecError{ExitCode: 1}},
+		{"other missing path", "cat: /other: No such file or directory", &docker.ExecError{ExitCode: 1}},
+		{"timeout", missing, &docker.ExecError{ExitCode: 124}},
+		{"inspect failure", missing, errors.New("inspect failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &fakeEngine{
+				infos: map[string]docker.ContainerInfo{WorldContainer: {Name: WorldContainer, Running: true}},
+				ready: tc.output, execErr: tc.execErr,
+			}
+			_, err := (DockerWorld{Engine: engine}).Status(context.Background())
+			if !errors.Is(err, tc.execErr) {
+				t.Fatalf("error=%v, want %v", err, tc.execErr)
 			}
 		})
 	}

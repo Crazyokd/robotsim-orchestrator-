@@ -24,9 +24,7 @@ const (
 	// 同一台机器上再开几路 Gazebo 时扫描匹配要排队，45s 会在还差几米时超时。
 	localizeTimeout = 3 * time.Minute
 
-	// localizeToleranceMM 是"车端上报位姿 vs 下发位姿"的容差（mm）。
-	// 这是**判别力所在**的判据：坐标系搞错（world 与 map 差一个 origin_offset）是米级，
-	// 而实测两张图在修好偏移后分别落在 15 mm（arena）与 2 mm（corridor），故取 150 mm。
+	// 定位容差属于车端判据，不由场景配置。
 	localizeToleranceMM = 150.0
 	// localizeToleranceRad 是朝向容差。
 	localizeToleranceRad = 0.3
@@ -109,7 +107,7 @@ func statusJSON(ctx context.Context, apiPort int) ([]byte, error) {
 	return body, nil
 }
 
-// awaitPose 轮询车端上报位姿，直到它与下发的目标位姿一致且置信度达标。
+// awaitPose 轮询车端上报位姿，直到地图匹配且位姿落入统一容差。
 func (v Vehicle) awaitPose(ctx context.Context, want contract.Pose) error {
 	deadline := time.Now().Add(localizeTimeout)
 	var last string
@@ -121,7 +119,7 @@ func (v Vehicle) awaitPose(ctx context.Context, want contract.Pose) error {
 		if status >= 300 {
 			return fmt.Errorf("localize %s: status %d", v.Robot.Name, status)
 		}
-		converged, observed, err := poseConverged(body, want)
+		converged, observed, err := poseConverged(body, want, v.Section.MapName)
 		if err != nil {
 			return fmt.Errorf("localize %s: %w", v.Robot.Name, err)
 		}
@@ -142,11 +140,12 @@ func (v Vehicle) awaitPose(ctx context.Context, want contract.Pose) error {
 
 // poseConverged 判断车端状态体里的定位位姿是否已经落在目标位姿的容差内。
 // 返回 (是否收敛, 观测到的位姿描述, 错误)。
-func poseConverged(body []byte, want contract.Pose) (bool, string, error) {
+func poseConverged(body []byte, want contract.Pose, mapName string) (bool, string, error) {
 	var status struct {
 		Data struct {
 			Localization struct {
 				Pose struct {
+					MapID      string   `json:"map_id"`
 					X          *float64 `json:"x"`
 					Y          *float64 `json:"y"`
 					Theta      *float64 `json:"theta"`
@@ -159,6 +158,9 @@ func poseConverged(body []byte, want contract.Pose) (bool, string, error) {
 		return false, "", fmt.Errorf("decode vehicle status: %w", err)
 	}
 	pose := status.Data.Localization.Pose
+	if pose.MapID != mapName {
+		return false, fmt.Sprintf("map=%q, want %q", pose.MapID, mapName), nil
+	}
 	if pose.X == nil || pose.Y == nil {
 		return false, "pose missing", nil
 	}

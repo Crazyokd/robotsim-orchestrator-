@@ -184,6 +184,17 @@ type DockerEngine struct {
 	HTTP *http.Client
 }
 
+// ExecError distinguishes command failures from Docker API failures.
+type ExecError struct {
+	Container string
+	ExitCode  int
+	Output    string
+}
+
+func (e *ExecError) Error() string {
+	return fmt.Sprintf("exec in %s failed with exit code %d: %s", e.Container, e.ExitCode, e.Output)
+}
+
 var errContainerAlreadyStopped = errors.New("container already stopped")
 
 func NewDockerEngine() (DockerEngine, error) {
@@ -357,7 +368,24 @@ func (d DockerEngine) Exec(ctx context.Context, name string, cmd []string) (stri
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(stripDockerStream(raw)), nil
+	output := strings.TrimSpace(stripDockerStream(raw))
+	var state struct {
+		Running  *bool
+		ExitCode *int
+	}
+	if err := d.json(ctx, http.MethodGet, "/exec/"+created.ID+"/json", nil, &state); err != nil {
+		return output, fmt.Errorf("inspect exec in %s: %w", name, err)
+	}
+	if state.Running == nil || state.ExitCode == nil {
+		return output, fmt.Errorf("inspect exec in %s: missing exec state", name)
+	}
+	if *state.Running {
+		return output, fmt.Errorf("exec in %s is still running", name)
+	}
+	if *state.ExitCode != 0 {
+		return output, &ExecError{Container: name, ExitCode: *state.ExitCode, Output: output}
+	}
+	return output, nil
 }
 
 func (d DockerEngine) List(ctx context.Context) ([]ContainerInfo, error) {

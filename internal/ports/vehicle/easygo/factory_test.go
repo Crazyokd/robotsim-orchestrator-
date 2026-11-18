@@ -14,6 +14,7 @@ func TestParseSectionRejectsDirtyInput(t *testing.T) {
 		wantErr string
 	}{
 		{"unknown field", `{"map_export": "m", "map_name": "n", "legacy": 1}`, "unknown field"},
+		{"localization tolerance override", `{"map_export":"m","map_name":"0814caterpiller","localization_position_tolerance_m":0.5}`, "unknown field"},
 		{"empty map_export", `{"map_export": "", "map_name": "n"}`, "map_export must not be empty"},
 		{"missing map_name", `{"map_export": "m"}`, "map_name must not be empty"},
 		{"not json", `{`, "parse vehicles.easygo section"},

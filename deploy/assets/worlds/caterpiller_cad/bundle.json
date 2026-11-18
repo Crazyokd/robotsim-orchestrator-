@@ -1,0 +1,29 @@
+{
+  "world": "caterpiller_cad",
+  "stations": [],
+  "initial_poses": [
+    {
+      "index": 1,
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.05,
+      "yaw": 0.0
+    }
+  ],
+  "worlds": {
+    "gazebo": {
+      "sdf": "gazebo/world.sdf"
+    }
+  },
+  "vehicles": {
+    "easygo": {
+      "map_export": "easygo/0814caterpiller.map_export",
+      "map_name": "0814caterpiller",
+      "origin_offset_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    }
+  },
+  "source_sha": "05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1"
+}

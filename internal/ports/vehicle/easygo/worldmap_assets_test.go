@@ -194,10 +194,7 @@ func TestShippedWorldBundlesDeclareCoordinatesInsideTheirMaps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			archive, err := os.ReadFile(filepath.Join(worldsDir, world, section.MapExport))
-			if err != nil {
-				t.Fatalf("world map missing: %v", err)
-			}
+			archive := shippedMapArchive(t, worldsDir, world, section.MapExport)
 			grid, err := readWorldMapGrid(archive)
 			if err != nil {
 				t.Fatal(err)

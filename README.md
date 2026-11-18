@@ -44,8 +44,20 @@ EasyGo/Gazebo 当前支持 slot 0..2、每路最多 10 台车。EasyGo 数据在
 按 kind 分节）。站点与初始位姿是世界系 m / rad；车端要的地图与坐标偏移在
 `vehicles.<kind>` 节里声明。
 
+EasyGo 启动定位统一检查地图身份、每轴 150 mm 位置误差和 0.3 rad 航向误差；bundle 不提供容差覆盖。
+
 N=1 的 API 在 `http://127.0.0.1:18189/api/v6`。观察视图按车单独开关：`--rviz 1,2` 给指定的车开 RViz web（N=1 在 `http://127.0.0.1:6181/vnc.html`），`--gz-gui 1` 开 web-gz 3D（N=1 在 `http://127.0.0.1:6180/vnc.html`）。端口按契约算术 `base+100N`——N=2 的 RViz 在 `:6281`。默认 headless。
 
 gz-gui 一个窗口就包含所有车；不需要每车开一个。环境镜像不含 easygo-app。既有 worlds / 机器人模型来自 EasyGo `05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1`，记录在 `deploy/assets/EASYGO_WORLD_SOURCE_SHA`。`junctions` 几何由本仓新增，复用同一 pinned 机器人模型。
+
+`--world caterpiller_cad` 提供原 `map_world`、同一 EasyGo 修订的 CAD 几何、四类原模型及其 `charging` 依赖（逐文件校验见该 bundle 的 `gazebo/SHA256SUMS`），以及完整 `0814caterpiller` 导航地图。地图为 193296560 字节，SHA256 为 `6cbb3e95a8d2a8b6b02ee7f1a4c6696ac3d06d15e87064742b1b16ba868b23f4`，含原八站、`.nav.pgm`、`.route.geojson` 等 20 个资源；不以轻量地图替换。bundle 的地图偏移为零，初始位姿为原点，`stations` 留空以保留导入地图中的原站名和小数坐标。Dockerfile 从固定 digest 的独立数据镜像复制地图并校验，不将大文件纳入 Git。EasyGo Port 还需从宿主 bundle 读取同一制品，因此首次启动前在仓库根目录提取到已被 Git 和 Docker 构建上下文忽略的路径，再跑完整资产检查；未提取时源码测试会明确跳过该地图的 payload 检查：
+
+```bash
+cad_map_source=$(docker create nexus3.sr/easygo/nav-test-map:0814caterpiller-6cbb3e95@sha256:939ef58a64666ac610ebc840e807cdde63b0dcdce2d7cf5eaa6c475b59aecc11)
+docker cp "$cad_map_source:/fixtures/0814caterpiller.map_export" deploy/assets/worlds/caterpiller_cad/easygo/
+docker rm "$cad_map_source"
+(cd deploy/assets/worlds/caterpiller_cad/easygo && sha256sum -c 0814caterpiller.map_export.sha256)
+go test ./...
+```
 
 宿主有 `/dev/dri` 时，世界容器会挂载它做硬件射线检测；没有则退回 llvmpipe 软件渲染，N≥2 跑不到实时。

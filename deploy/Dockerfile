@@ -5,6 +5,8 @@ COPY cmd cmd
 COPY internal internal
 RUN go build -o /simenv-world-gazebo ./cmd/simenv-world-gazebo
 
+FROM nexus3.sr/easygo/nav-test-map:0814caterpiller-6cbb3e95@sha256:939ef58a64666ac610ebc840e807cdde63b0dcdce2d7cf5eaa6c475b59aecc11 AS navigation-map
+
 FROM nexus3.sr:8060/ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -16,6 +18,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /simenv-world-gazebo /usr/local/bin/simenv-world-gazebo
 COPY deploy/assets /opt/simenv
+COPY --from=navigation-map /fixtures/0814caterpiller.map_export /opt/simenv/worlds/caterpiller_cad/easygo/0814caterpiller.map_export
+RUN cd /opt/simenv/worlds/caterpiller_cad/easygo && sha256sum -c 0814caterpiller.map_export.sha256
 ENV GZ_SIM_RESOURCE_PATH=/opt/simenv/models
 ENV GZ_IP=127.0.0.1
 ENV GZ_PARTITION=easygo_sim

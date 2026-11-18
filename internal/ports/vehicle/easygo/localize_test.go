@@ -3,7 +3,9 @@ package easygo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -13,7 +15,62 @@ import (
 	"time"
 
 	"git.standard-robots.com/yicao/sim/internal/contract"
+	"git.standard-robots.com/yicao/sim/internal/ports/runtime/docker"
 )
+
+type noExecEngine struct {
+	docker.Engine
+}
+
+func (noExecEngine) Exec(context.Context, string, []string) (string, error) {
+	return "", errors.New("localization must use the vehicle API without an external probe")
+}
+
+type localizeTransport func(*http.Request) (*http.Response, error)
+
+func (f localizeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestLocalizationUsesTheVehicleResultWithoutAnExternalProbe(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusConflict} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			previous := httpClient
+			t.Cleanup(func() { httpClient = previous })
+			requests, observations := 0, 0
+			httpClient = &http.Client{Transport: localizeTransport(func(request *http.Request) (*http.Response, error) {
+				if request.Method != http.MethodPost || request.URL.Path != "/api/v6/vehicle/localization/initial-pose" {
+					t.Fatalf("unexpected vehicle request: %s %s", request.Method, request.URL.Path)
+				}
+				requests++
+				body := `{"error_code":0,"error_msg":"","data":null}`
+				if status == http.StatusConflict {
+					body = `{"error_code":900009,"error_msg":"Localization failed"}`
+				}
+				return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+			})}
+			vehicle := Vehicle{
+				Robot: contract.Robot{Index: 1, Name: "robot1"}, Engine: noExecEngine{},
+				Section: Section{MapName: "map"},
+				DoJSON: func(context.Context, string, string, []byte) ([]byte, int, error) {
+					observations++
+					return []byte(`{"data":{"localization":{"pose":{"map_id":"map","x":0,"y":0,"theta":0}}}}`), http.StatusOK, nil
+				},
+			}
+			err := vehicle.localize(context.Background(), "map", contract.Pose{})
+			if requests != 1 {
+				t.Fatalf("localization did not go directly to the vehicle: requests=%d err=%v", requests, err)
+			}
+			if status == http.StatusConflict {
+				if err == nil || !strings.Contains(err.Error(), "409") || !strings.Contains(err.Error(), "Localization failed") || observations != 0 {
+					t.Fatalf("vehicle rejection was not propagated: err=%v observations=%d", err, observations)
+				}
+			} else if err != nil || observations != 1 {
+				t.Fatalf("accepted localization did not verify convergence: err=%v observations=%d", err, observations)
+			}
+		})
+	}
+}
 
 func TestInitialPoseRequestConvertsToMillimetresAndMilliradians(t *testing.T) {
 	body, err := initialPoseRequest("arena_world", contract.Pose{X: 3, Y: -1.5, Yaw: 1.25})
@@ -35,6 +92,41 @@ func TestInitialPoseRequestConvertsToMillimetresAndMilliradians(t *testing.T) {
 	}
 }
 
+func TestAwaitPoseUsesTheSameToleranceForEveryMap(t *testing.T) {
+	for _, mapName := range []string{"simple", "corridor", "0814caterpiller"} {
+		for _, tc := range []struct {
+			name, observedMap string
+			x, y, theta       float64
+			accepted          bool
+		}{
+			{"within tolerance", mapName, 140, 140, 0, true},
+			{"boundary", mapName, 150, -150, 300, true},
+			{"outside x", mapName, 151, 0, 0, false},
+			{"outside y", mapName, 0, -151, 0, false},
+			{"observed CAD offset", mapName, -284.5, 166.6, -2, false},
+			{"wrong map", "other-map", 0, 0, 0, false},
+			{"missing map", "", 0, 0, 0, false},
+			{"wrong yaw", mapName, 0, 0, 301, false},
+		} {
+			t.Run(mapName+"/"+tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				vehicle := Vehicle{Section: Section{MapName: mapName}, Robot: contract.Robot{Name: "robot1"}, DoJSON: func(context.Context, string, string, []byte) ([]byte, int, error) {
+					cancel()
+					return []byte(fmt.Sprintf(`{"data":{"localization":{"pose":{"map_id":%q,"x":%v,"y":%v,"theta":%v,"confidence":99}}}}`, tc.observedMap, tc.x, tc.y, tc.theta)), http.StatusOK, nil
+				}}
+				err := vehicle.awaitPose(ctx, contract.Pose{})
+				if tc.accepted && err != nil {
+					t.Fatalf("pose rejected: %v", err)
+				}
+				if !tc.accepted && !errors.Is(err, context.Canceled) {
+					t.Fatalf("expected an unconverged pose, got %v", err)
+				}
+			})
+		}
+	}
+}
+
 // arena 的 bundle 偏移：世界坐标 = 地图坐标 + (1978.0, -3181.5) mm。
 var arenaOffset = OriginOffset{X: 1978.0, Y: -3181.5}
 
@@ -53,7 +145,7 @@ func TestPoseConverged(t *testing.T) {
 	want := contract.Pose{X: -1.978, Y: 3.1815, Yaw: 0}
 	status := func(x, y, theta float64, confidence int) []byte {
 		return []byte(fmt.Sprintf(
-			`{"data":{"localization":{"pose":{"x":%v,"y":%v,"theta":%v,"confidence":%d}}}}`,
+			`{"data":{"localization":{"pose":{"map_id":"arena_world","x":%v,"y":%v,"theta":%v,"confidence":%d}}}}`,
 			x, y, theta, confidence,
 		))
 	}
@@ -66,13 +158,13 @@ func TestPoseConverged(t *testing.T) {
 		{"exactly on target", status(-1978, 3181.5, 0, 99), true},
 		{"world frame instead of map frame (the frame bug)", status(0, 0, 0, 99), false},
 		{"low confidence is recorded, not gated", status(-1969, 3166, 1.2, 40), true},
-		{"missing confidence is fine", []byte(`{"data":{"localization":{"pose":{"x":-1969,"y":3166,"theta":1.2}}}}`), true},
-		{"pose missing", []byte(`{"data":{"localization":{"pose":{}}}}`), false},
+		{"missing confidence is fine", []byte(`{"data":{"localization":{"pose":{"map_id":"arena_world","x":-1969,"y":3166,"theta":1.2}}}}`), true},
+		{"pose missing", []byte(`{"data":{"localization":{"pose":{"map_id":"arena_world"}}}}`), false},
 		{"heading off by a radian", status(-1969, 3166, 1000, 99), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, observed, err := poseConverged(tc.body, want)
+			ok, observed, err := poseConverged(tc.body, want, "arena_world")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,8 +195,8 @@ func TestPoseConvergedWrapsHeadingAcrossPi(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(fmt.Sprintf(
-				`{"data":{"localization":{"pose":{"x":7194,"y":459,"theta":%v,"confidence":80}}}}`, tc.theta))
-			ok, observed, err := poseConverged(body, want)
+				`{"data":{"localization":{"pose":{"map_id":"arena_world","x":7194,"y":459,"theta":%v,"confidence":80}}}}`, tc.theta))
+			ok, observed, err := poseConverged(body, want, "arena_world")
 			if err != nil {
 				t.Fatal(err)
 			}

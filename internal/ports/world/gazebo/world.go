@@ -239,11 +239,15 @@ func readyReportMatches(report process.ReadyReport, session contract.Session) bo
 func readReady(ctx context.Context, engine docker.Engine, container string) (process.ReadyReport, error) {
 	out, err := engine.Exec(ctx, container, []string{"cat", process.ReadyPath})
 	if err != nil {
+		var commandErr *docker.ExecError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 &&
+			out == "cat: "+process.ReadyPath+": No such file or directory" {
+			return process.ReadyReport{}, errWorldNotReady
+		}
 		return process.ReadyReport{}, err
 	}
 	raw := strings.TrimSpace(out)
-	lower := strings.ToLower(raw)
-	if raw == "" || strings.Contains(lower, "no such file or directory") {
+	if raw == "" {
 		return process.ReadyReport{}, errWorldNotReady
 	}
 	var report process.ReadyReport
