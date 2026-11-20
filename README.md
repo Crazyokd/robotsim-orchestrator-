@@ -50,7 +50,7 @@ N=1 的 API 在 `http://127.0.0.1:18189/api/v6`。观察视图按车单独开关
 
 gz-gui 一个窗口就包含所有车；不需要每车开一个。环境镜像不含 easygo-app。既有 worlds / 机器人模型来自 EasyGo `05316d350aadc40f2d1e7bbbe2ed09d4a1092eb1`，记录在 `deploy/assets/EASYGO_WORLD_SOURCE_SHA`。`junctions` 几何由本仓新增，复用同一 pinned 机器人模型。
 
-`--world caterpiller_cad` 提供原 `map_world`、同一 EasyGo 修订的 CAD 几何、四类原模型及其 `charging` 依赖（逐文件校验见该 bundle 的 `gazebo/SHA256SUMS`），以及完整 `0814caterpiller` 导航地图。地图为 193296560 字节，SHA256 为 `6cbb3e95a8d2a8b6b02ee7f1a4c6696ac3d06d15e87064742b1b16ba868b23f4`，含原八站、`.nav.pgm`、`.route.geojson` 等 20 个资源；不以轻量地图替换。bundle 的地图偏移为零，初始位姿为原点，`stations` 留空以保留导入地图中的原站名和小数坐标。Dockerfile 从固定 digest 的独立数据镜像复制地图并校验，不将大文件纳入 Git。EasyGo Port 还需从宿主 bundle 读取同一制品，因此首次启动前在仓库根目录提取到已被 Git 和 Docker 构建上下文忽略的路径，再跑完整资产检查；未提取时源码测试会明确跳过该地图的 payload 检查：
+`--world caterpiller_cad` 提供原 `map_world`、同一 EasyGo 修订的 CAD 几何、四类原模型及其 `charging` 依赖（逐文件校验见该 bundle 的 `gazebo/SHA256SUMS`），以及完整 `0814caterpiller` 导航地图。地图为 193296560 字节，SHA256 为 `6cbb3e95a8d2a8b6b02ee7f1a4c6696ac3d06d15e87064742b1b16ba868b23f4`，含原八站、`.nav.pgm`、`.route.geojson` 等 20 个资源；不以轻量地图替换。bundle 用原 `.traj` 首个车体位姿 `(-0.300143689238, 0.149712306612)m` 声明地图到世界的偏移 `(300.143689238, -149.712306612)mm`；地图原点位于首帧激光，仿真初始车体位姿仍为世界原点，`stations` 留空以保留导入地图中的原站名和小数坐标。Dockerfile 从固定 digest 的独立数据镜像复制地图并校验，不将大文件纳入 Git。EasyGo Port 还需从宿主 bundle 读取同一制品，因此首次启动前在仓库根目录提取到已被 Git 和 Docker 构建上下文忽略的路径，再跑完整资产检查；未提取时源码测试会明确跳过该地图的 payload 检查：
 
 ```bash
 cad_map_source=$(docker create nexus3.sr/easygo/nav-test-map:0814caterpiller-6cbb3e95@sha256:939ef58a64666ac610ebc840e807cdde63b0dcdce2d7cf5eaa6c475b59aecc11)

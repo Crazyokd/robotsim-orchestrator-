@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"git.standard-robots.com/yicao/sim/internal/assets"
+	"git.standard-robots.com/yicao/sim/internal/contract"
 )
 
 // 出货的 bundle 必须是自洽的：vehicles.easygo 节声明的地图档案必须真实存在，
@@ -92,7 +93,7 @@ func TestCADNavigationBundlePreservesOriginalMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if section.MapName != "0814caterpiller" || section.MapExport != "easygo/0814caterpiller.map_export" || section.OriginOffsetMM != (OriginOffset{}) {
+	if section.MapName != "0814caterpiller" || section.MapExport != "easygo/0814caterpiller.map_export" || section.OriginOffsetMM != (OriginOffset{X: 300.143689238, Y: -149.712306612}) {
 		t.Fatalf("CAD navigation map binding drifted: %+v", section)
 	}
 	if len(bundle.Stations) != 0 {
@@ -112,6 +113,8 @@ func TestCADNavigationBundlePreservesOriginalMap(t *testing.T) {
 	}
 	entries := tar.NewReader(reader)
 	var names []string
+	var initialMapPose contract.Pose
+	var sawTrajectory bool
 	var stations []struct {
 		ID   int     `json:"id"`
 		Name string  `json:"name"`
@@ -132,6 +135,17 @@ func TestCADNavigationBundlePreservesOriginalMap(t *testing.T) {
 		}
 		name := path.Base(header.Name)
 		names = append(names, strings.TrimPrefix(name, "0814caterpiller"))
+		if name == "0814caterpiller.traj" {
+			var version string
+			var index int
+			if _, err := fmt.Fscan(entries, &version, &index, &initialMapPose.X, &initialMapPose.Y, &initialMapPose.Yaw); err != nil {
+				t.Fatal(err)
+			}
+			if version != "v1.0.0" || index != 0 {
+				t.Fatal("original map trajectory has no initial body pose")
+			}
+			sawTrajectory = true
+		}
 		if name == "0814caterpiller.json" {
 			var document struct {
 				Data struct {
@@ -145,6 +159,13 @@ func TestCADNavigationBundlePreservesOriginalMap(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+	if !sawTrajectory {
+		t.Fatal("original map trajectory is required to anchor the map frame")
+	}
+	mapped := mapPose(bundle.InitialPoses[0].Pose(), section.OriginOffsetMM)
+	if abs(mapped.X-initialMapPose.X) > 1e-12 || abs(mapped.Y-initialMapPose.Y) > 1e-12 {
+		t.Fatalf("spawn maps to %+v, original trajectory starts at %+v", mapped, initialMapPose)
 	}
 	slices.Sort(names)
 	wantResources := []string{".edited_region", ".g2o", ".info", ".json", ".lom", ".nav.pgm", ".om", ".route.geojson", ".sbag", ".tiff", ".traj", "0.pgm", "1.pgm", "2.pgm", "_1.png", "_2.png", "_4.png", "_8.png", "_dynamic.tiff", "_update.tiff"}
